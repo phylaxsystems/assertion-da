@@ -1,0 +1,30 @@
+[package]
+name = "assertion-da-client"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+jsonrpsee = { version = "0.24.7", features = [
+    "client",
+    "http-client",
+    "server",
+] }
+http = "1.1.0"
+serde_json = "1.0"
+thiserror = "2"
+alloy.workspace = true
+assertion-da-core = { path = "../core" }
+
+
+[dev-dependencies]
+assertion-da-server = { path = "../server" }
+alloy.workspace = true
+bincode.workspace = true
+sled.workspace = true
+tempfile.workspace = true
+mockall.workspace = true
+wiremock.workspace = true
+reqwest = { version = "0.12", features = ["json"] }
+bollard.workspace = true
