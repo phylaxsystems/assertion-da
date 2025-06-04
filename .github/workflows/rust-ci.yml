@@ -10,7 +10,7 @@ env:
 
 jobs:
   rust-base:
-    uses: phylaxsystems/actions/.github/workflows/rust-base.yaml@odyslam-patch-1
+    uses: phylaxsystems/actions/.github/workflows/rust-base.yaml@main
     with:
       rust-channel: 'nightly'
       dind: true
