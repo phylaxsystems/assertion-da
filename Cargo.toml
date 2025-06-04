@@ -7,7 +7,7 @@ members = [ "crates/client","crates/server", "crates/core"]
 alloy = { version = "0.11.1", features = ["full", "node-bindings", "json-rpc", "rpc-client", "signer-local", "k256"] }
 alloy-dyn-abi = {version = "0.8.15", features = ["std"] }
 alloy-json-abi = "0.8.15"
-rust-tracing = { git = "https://github.com/phylaxsystems/rust-tracing.git", rev = "7c3861c83b880c40e1f2c6005892f1d915598081"}
+rust-tracing = { git = "https://github.com/phylaxsystems/rust-tracing.git", tag = "0.1.3"}
 
 anyhow = "1.0.86"
 clap = {version = "4.5.11", features = ["derive", "env"]}

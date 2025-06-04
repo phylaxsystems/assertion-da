@@ -4431,7 +4431,7 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 [[package]]
 name = "rust-tracing"
 version = "0.1.3"
-source = "git+https://github.com/phylaxsystems/rust-tracing.git?rev=7c3861c83b880c40e1f2c6005892f1d915598081#7c3861c83b880c40e1f2c6005892f1d915598081"
+source = "git+https://github.com/phylaxsystems/rust-tracing.git?tag=0.1.3#7c3861c83b880c40e1f2c6005892f1d915598081"
 dependencies = [
  "alloy 0.12.6",
  "init4-from-env-derive",
