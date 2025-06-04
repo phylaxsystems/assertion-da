@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
-package = { version = "0.1.2" }
 members = [ "crates/client","crates/server", "crates/core"]
+
+[workspace.package]
+version = "0.1.2"
 
 [workspace.dependencies]
 alloy = { version = "0.11.1", features = ["full", "node-bindings", "json-rpc", "rpc-client", "signer-local", "k256"] }
