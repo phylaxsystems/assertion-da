@@ -1,15 +1,13 @@
 [workspace]
 resolver = "2"
+package = { version = "0.1.2" }
 members = [ "crates/client","crates/server", "crates/core"]
-
-[workspace.package]
-version = "0.1.2"
 
 [workspace.dependencies]
 alloy = { version = "0.11.1", features = ["full", "node-bindings", "json-rpc", "rpc-client", "signer-local", "k256"] }
 alloy-dyn-abi = {version = "0.8.15", features = ["std"] }
 alloy-json-abi = "0.8.15"
-rust-tracing = { git = "https://github.com/phylaxsystems/rust-tracing.git", rev = "7c3861c83b880c40e1f2c6005892f1d915598081"}
+rust-tracing = { git = "https://github.com/phylaxsystems/rust-tracing.git", tag = "0.1.3"}
 
 anyhow = "1.0.86"
 clap = {version = "4.5.11", features = ["derive", "env"]}
@@ -18,7 +16,7 @@ reqwest = { version = "0.12.5", features = ["json"] }
 serde = "1.0.204"
 serde_json = "1.0.121"
 tokio = { version = "1.39.2", features = ["full"] }
-tokio-util = "0.7.15"
+tokio-util = "0.6.2"
 zerocopy = "0.7.35"
 hyper = { version = "1.4.1", features = ["full"] }
 util = "0.1.3"

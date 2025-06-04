@@ -815,7 +815,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.15",
  "tracing",
 ]
 
@@ -1085,7 +1085,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.10",
  "wiremock",
 ]
 
@@ -1135,7 +1135,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
- "tokio-util",
+ "tokio-util 0.6.10",
  "tracing",
  "tracing-subscriber",
  "util",
@@ -1386,7 +1386,7 @@ dependencies = [
  "serde_urlencoded",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.15",
  "tower-service",
  "url",
  "winapi",
@@ -2410,7 +2410,7 @@ dependencies = [
  "indexmap 2.8.0",
  "slab",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.15",
  "tracing",
 ]
 
@@ -3011,7 +3011,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
- "tokio-util",
+ "tokio-util 0.7.15",
  "tracing",
  "url",
 ]
@@ -3090,7 +3090,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
- "tokio-util",
+ "tokio-util 0.7.15",
  "tower 0.4.13",
  "tracing",
 ]
@@ -4431,7 +4431,7 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 [[package]]
 name = "rust-tracing"
 version = "0.1.3"
-source = "git+https://github.com/phylaxsystems/rust-tracing.git?rev=7c3861c83b880c40e1f2c6005892f1d915598081#7c3861c83b880c40e1f2c6005892f1d915598081"
+source = "git+https://github.com/phylaxsystems/rust-tracing.git?tag=0.1.3#7c3861c83b880c40e1f2c6005892f1d915598081"
 dependencies = [
  "alloy 0.12.6",
  "init4-from-env-derive",
@@ -5378,7 +5378,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.15",
 ]
 
 [[package]]
@@ -5395,6 +5395,20 @@ dependencies = [
  "tokio-rustls",
  "tungstenite",
  "webpki-roots",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36943ee01a6d67977dd3f84a5a1d2efeb4ada3a1ae771cadfaa535d9d9fc6507"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
