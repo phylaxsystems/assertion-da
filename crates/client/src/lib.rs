@@ -589,7 +589,7 @@ mod tests {
                 DaClientError::InvalidResponse(msg) => {
                     assert!(msg.contains("Invalid JSON-RPC version"));
                 }
-                other => panic!("Expected InvalidResponse error, got: {:?}", other),
+                other => panic!("Expected InvalidResponse error, got: {other:?}"),
             }
         }
 
@@ -620,7 +620,7 @@ mod tests {
                 DaClientError::InvalidResponse(msg) => {
                     assert!(msg.contains("Request/response ID mismatch"));
                 }
-                other => panic!("Expected InvalidResponse error, got: {:?}", other),
+                other => panic!("Expected InvalidResponse error, got: {other:?}"),
             }
         }
     }
