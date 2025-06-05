@@ -1,20 +1,15 @@
 use alloy::primitives::B256;
+use http::header;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
-use jsonrpsee::{
-    core::client::ClientT,
-    http_client::{
-        HttpClient,
-        HttpClientBuilder,
-    },
-};
+use url::Url;
 
 pub use assertion_da_core::{
     DaFetchResponse,
     DaSubmission,
     DaSubmissionResponse,
 };
-use http::header;
-pub use jsonrpsee::core::client::Error as ClientError;
 
 /// A client for interacting with the DA layer
 /// This client is responsible for fetching bytecode from the DA layer
@@ -32,34 +27,146 @@ pub use jsonrpsee::core::client::Error as ClientError;
 /// }         
 #[derive(Debug)]
 pub struct DaClient {
-    client: HttpClient,
+    client: Client,
+    base_url: Url,
+    request_id: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaClientError {
-    #[error("Client error: {0}")]
-    ClientError(#[from] ClientError),
+    #[error("HTTP client error: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+    #[error("URL parse error: {0}")]
+    UrlParseError(#[from] url::ParseError),
+    #[error("JSON serialization error: {0}")]
+    JsonError(#[from] serde_json::Error),
+    #[error("JSON-RPC error code {code}: {message}")]
+    JsonRpcError { code: i32, message: String },
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
+}
+
+/// JSON-RPC request structure
+#[derive(Debug, Serialize)]
+struct JsonRpcRequest<T> {
+    jsonrpc: String,
+    method: String,
+    params: T,
+    id: u64,
+}
+
+/// JSON-RPC response structure for successful responses
+#[derive(Debug, Deserialize)]
+struct JsonRpcResponse<T> {
+    jsonrpc: String,
+    result: Option<T>,
+    error: Option<JsonRpcError>,
+    id: u64,
+}
+
+/// JSON-RPC error structure
+#[derive(Debug, Deserialize)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
 }
 
 impl DaClient {
     /// Create a new DA client
     pub fn new(da_url: &str) -> Result<Self, DaClientError> {
-        let client = HttpClientBuilder::default().build(da_url)?;
+        let base_url = Url::parse(da_url)?;
+        let client = Client::builder()
+            .use_rustls_tls()
+            .build()?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            base_url,
+            request_id: std::sync::atomic::AtomicU64::new(1),
+        })
     }
 
     /// Create a new DA client with authentication
     pub fn new_with_auth(da_url: &str, auth: &str) -> Result<Self, DaClientError> {
+        let base_url = Url::parse(da_url)?;
         let mut headers = header::HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, auth.parse().unwrap());
-        let client = HttpClientBuilder::default()
-            .set_headers(headers)
-            .build(da_url)?;
+        headers.insert(header::AUTHORIZATION, auth.parse().map_err(|_| {
+            DaClientError::InvalidResponse("Invalid authorization header".to_string())
+        })?);
+        
+        let client = Client::builder()
+            .use_rustls_tls()
+            .default_headers(headers)
+            .build()?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            base_url,
+            request_id: std::sync::atomic::AtomicU64::new(1),
+        })
+    }
+
+    /// Get next request ID
+    fn next_request_id(&self) -> u64 {
+        self.request_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Make a JSON-RPC request
+    async fn make_request<P, R>(&self, method: &str, params: P) -> Result<R, DaClientError>
+    where
+        P: Serialize,
+        R: for<'de> Deserialize<'de>,
+    {
+        let request_id = self.next_request_id();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+            id: request_id,
+        };
+
+        let response = self
+            .client
+            .post(self.base_url.clone())
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(DaClientError::InvalidResponse(format!(
+                "HTTP error: {}",
+                response.status()
+            )));
+        }
+
+        let response_body: JsonRpcResponse<R> = response.json().await?;
+
+        // Validate JSON-RPC 2.0 compliance
+        if response_body.jsonrpc != "2.0" {
+            return Err(DaClientError::InvalidResponse(format!(
+                "Invalid JSON-RPC version: expected '2.0', got '{}'",
+                response_body.jsonrpc
+            )));
+        }
+
+        if response_body.id != request_id {
+            return Err(DaClientError::InvalidResponse(format!(
+                "Request/response ID mismatch: expected {}, got {}",
+                request_id, response_body.id
+            )));
+        }
+
+        if let Some(error) = response_body.error {
+            return Err(DaClientError::JsonRpcError {
+                code: error.code,
+                message: error.message,
+            });
+        }
+
+        response_body.result.ok_or_else(|| {
+            DaClientError::InvalidResponse("Missing result in successful response".to_string())
+        })
     }
 
     /// Fetch the bytecode and signature for the given assertion id from the DA layer
@@ -67,12 +174,8 @@ impl DaClient {
         &self,
         assertion_id: B256,
     ) -> Result<DaFetchResponse, DaClientError> {
-        let response = self
-            .client
-            .request::<_, &[String]>("da_get_assertion", &[assertion_id.to_string()])
-            .await?;
-
-        Ok(response)
+        let params = vec![assertion_id.to_string()];
+        self.make_request("da_get_assertion", params).await
     }
 
     /// Submit the assertion bytecode to the DA layer
@@ -101,18 +204,16 @@ impl DaClient {
         constructor_abi_signature: String,
         constructor_args: Vec<String>,
     ) -> Result<DaSubmissionResponse, DaClientError> {
-        let params = DaSubmission {
+        let params = vec![DaSubmission {
             solidity_source,
             compiler_version,
             assertion_contract_name,
             constructor_abi_signature,
             constructor_args,
-        };
+        }];
 
-        Ok(self
-            .client
-            .request::<_, &[DaSubmission]>("da_submit_solidity_assertion", &[params])
-            .await?)
+        self.make_request("da_submit_solidity_assertion", params)
+            .await
     }
 }
 
@@ -445,5 +546,74 @@ mod tests {
         );
         assert_eq!(response.constructor_abi_signature, "constructor()");
         assert!(response.encoded_constructor_args.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_json_rpc_validation() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::method;
+        use serde_json::json;
+
+        // Test invalid JSON-RPC version
+        {
+            let mock_server = MockServer::start().await;
+            let client = DaClient::new(&mock_server.uri()).unwrap();
+
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "1.0", // Invalid version
+                    "result": {
+                        "solidity_source": "contract Test {}",
+                        "bytecode": "0x608060405234801561001057600080fd5b50600080fd5b00",
+                        "prover_signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef01",
+                        "encoded_constructor_args": "0x",
+                        "constructor_abi_signature": "constructor()"
+                    },
+                    "id": 1
+                })))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+
+            let result = client.fetch_assertion(Default::default()).await;
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                DaClientError::InvalidResponse(msg) => {
+                    assert!(msg.contains("Invalid JSON-RPC version"));
+                }
+                other => panic!("Expected InvalidResponse error, got: {:?}", other),
+            }
+        }
+
+        // Test mismatched ID  
+        {
+            let mock_server = MockServer::start().await;
+            let client = DaClient::new(&mock_server.uri()).unwrap();
+
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "solidity_source": "contract Test {}",
+                        "bytecode": "0x608060405234801561001057600080fd5b50600080fd5b00",
+                        "prover_signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef01",
+                        "encoded_constructor_args": "0x",
+                        "constructor_abi_signature": "constructor()"
+                    },
+                    "id": 999 // Will not match the sent ID
+                })))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+
+            let result = client.fetch_assertion(Default::default()).await;
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                DaClientError::InvalidResponse(msg) => {
+                    assert!(msg.contains("Request/response ID mismatch"));
+                }
+                other => panic!("Expected InvalidResponse error, got: {:?}", other),
+            }
+        }
     }
 }

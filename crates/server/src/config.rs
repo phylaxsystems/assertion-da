@@ -89,10 +89,7 @@ mod tests {
     use std::str::FromStr;
 
     use alloy::signers::local::PrivateKeySigner;
-    use assertion_da_client::{
-        ClientError,
-        DaClientError,
-    };
+    use assertion_da_client::DaClientError;
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
@@ -126,10 +123,11 @@ mod tests {
         let da_client =
             assertion_da_client::DaClient::new(&format!("http://{listen_addr}")).unwrap();
 
-        if let Err(DaClientError::ClientError(ClientError::Call(err))) =
+        if let Err(DaClientError::JsonRpcError { code, message }) =
             da_client.fetch_assertion(Default::default()).await
         {
-            assert_eq!(err.message(), "Assertion not found");
+            assert_eq!(code, 404);
+            assert_eq!(message, "Assertion not found");
         }
 
         cancel_token.cancel();

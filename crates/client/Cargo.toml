@@ -3,20 +3,21 @@ name = "assertion-da-client"
 version.workspace = true
 edition = "2024"
 
+[[example]]
+name = "test_http_client"
+path = "../../examples/test_http_client.rs"
+
 [dependencies]
 tokio.workspace = true
 tokio-util.workspace = true
-jsonrpsee = { version = "0.24.7", features = [
-    "client",
-    "http-client",
-    "server",
-] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 http = "1.1.0"
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "2"
 alloy.workspace = true
 assertion-da-core = { path = "../core" }
-
+url = "2.5"
 
 [dev-dependencies]
 assertion-da-server = { path = "../server" }
@@ -26,5 +27,4 @@ sled.workspace = true
 tempfile.workspace = true
 mockall.workspace = true
 wiremock.workspace = true
-reqwest = { version = "0.12", features = ["json"] }
 bollard.workspace = true
