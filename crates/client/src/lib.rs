@@ -1,7 +1,10 @@
 use alloy::primitives::B256;
 use http::header;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 
 use url::Url;
 
@@ -75,9 +78,7 @@ impl DaClient {
     /// Create a new DA client
     pub fn new(da_url: &str) -> Result<Self, DaClientError> {
         let base_url = Url::parse(da_url)?;
-        let client = Client::builder()
-            .use_rustls_tls()
-            .build()?;
+        let client = Client::builder().use_rustls_tls().build()?;
 
         Ok(Self {
             client,
@@ -90,10 +91,13 @@ impl DaClient {
     pub fn new_with_auth(da_url: &str, auth: &str) -> Result<Self, DaClientError> {
         let base_url = Url::parse(da_url)?;
         let mut headers = header::HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, auth.parse().map_err(|_| {
-            DaClientError::InvalidResponse("Invalid authorization header".to_string())
-        })?);
-        
+        headers.insert(
+            header::AUTHORIZATION,
+            auth.parse().map_err(|_| {
+                DaClientError::InvalidResponse("Invalid authorization header".to_string())
+            })?,
+        );
+
         let client = Client::builder()
             .use_rustls_tls()
             .default_headers(headers)
@@ -550,9 +554,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_json_rpc_validation() {
-        use wiremock::{MockServer, Mock, ResponseTemplate};
-        use wiremock::matchers::method;
         use serde_json::json;
+        use wiremock::matchers::method;
+        use wiremock::{
+            Mock,
+            MockServer,
+            ResponseTemplate,
+        };
 
         // Test invalid JSON-RPC version
         {
@@ -585,7 +593,7 @@ mod tests {
             }
         }
 
-        // Test mismatched ID  
+        // Test mismatched ID
         {
             let mock_server = MockServer::start().await;
             let client = DaClient::new(&mock_server.uri()).unwrap();

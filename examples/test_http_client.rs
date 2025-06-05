@@ -16,12 +16,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing authenticated client...");
     let _auth_client = DaClient::new_with_auth(
         "https://demo-21-assertion-da.phylax.systems",
-        "Bearer test-token"
+        "Bearer test-token",
     )?;
     println!("✓ Authenticated client created successfully");
 
-    println!("\nClient creation tests passed! The new reqwest-based client should resolve TLS/SSL issues.");
+    println!(
+        "\nClient creation tests passed! The new reqwest-based client should resolve TLS/SSL issues."
+    );
     println!("Now you can use the client with both HTTP and HTTPS endpoints without TLS errors.");
 
     Ok(())
-} 
+}
