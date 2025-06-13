@@ -114,7 +114,7 @@ where
                 Some(code) => code,
                 _ => {
                     warn!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, "Invalid params: missing or invalid bytecode parameter");
-                    return Ok(rpc_error(&json_rpc, -32602, "Invalid params"));
+                    return Ok(rpc_error_with_request_id(&json_rpc, -32602, "Invalid params", &request_id));
                 }
             };
 
@@ -123,7 +123,7 @@ where
                 Ok(code) => code,
                 _ => {
                     warn!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, code = code, "Failed to decode hex bytecode");
-                    return Ok(rpc_error(&json_rpc, 500, "Failed to decode hex"));
+                    return Ok(rpc_error_with_request_id(&json_rpc, 500, "Failed to decode hex", &request_id));
                 }
             };
 
@@ -135,10 +135,11 @@ where
                 Ok(sig) => sig,
                 Err(err) => {
                     warn!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Failed to sign assertion");
-                    return Ok(rpc_error(
+                    return Ok(rpc_error_with_request_id(
                         &json_rpc,
                         -32604,
                         "Internal Error: Failed to sign Assertion",
+                        &request_id,
                     ))
                 }
             };
@@ -171,10 +172,11 @@ where
                     Ok(da_submission) => da_submission,
                     Err(err) => {
                         warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Failed to parse DaSubmission payload");
-                        return Ok(rpc_error(
+                        return Ok(rpc_error_with_request_id(
                             &json_rpc,
                             -32602,
                             format!("Invalid params: Failed to parse payload {err:?}").as_str(),
+                            &request_id,
                         ))
                     }
                 };
@@ -192,10 +194,11 @@ where
                 Ok(bytecode) => bytecode,
                 Err(err) => {
                     warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, compiler_version = da_submission.compiler_version, contract_name = da_submission.assertion_contract_name, "Solidity compilation failed");
-                    return Ok(rpc_error(
+                    return Ok(rpc_error_with_request_id(
                         &json_rpc,
                         -32603,
                         &format!("Solidity Compilation Error: {err}"),
+                        &request_id,
                     ))
                 }
             };
@@ -207,10 +210,11 @@ where
                 Ok(encoded_args) => encoded_args,
                 Err(err) => {
                     warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, constructor_abi = da_submission.constructor_abi_signature, "Constructor args ABI encoding failed");
-                    return Ok(rpc_error(
+                    return Ok(rpc_error_with_request_id(
                         &json_rpc,
                         -32603,
                         &format!("Constructor args ABI Encoding Error: {err}"),
+                        &request_id,
                     ))
                 }
             };
@@ -224,10 +228,11 @@ where
                 Ok(sig) => sig,
                 Err(err) => {
                     warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Failed to sign assertion");
-                    return Ok(rpc_error(
+                    return Ok(rpc_error_with_request_id(
                         &json_rpc,
                         -32604,
                         "Internal Error: Failed to sign Assertion",
+                        &request_id,
                     ))
                 }
             };
@@ -260,10 +265,11 @@ where
                 Some(id) => id,
                 None => {
                     warn!(target: "json_rpc", method = "da_get_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, "Invalid params: missing id parameter");
-                    return Ok(rpc_error(
+                    return Ok(rpc_error_with_request_id(
                         &json_rpc,
                         -32602,
                         "Invalid params: Didn't find id",
+                        &request_id,
                     ))
                 }
             };
@@ -273,10 +279,11 @@ where
                 Ok(id) => id,
                 _ => {
                     warn!(target: "json_rpc", method = "da_get_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, id = id, "Failed to decode hex ID");
-                    return Ok(rpc_error(
+                    return Ok(rpc_error_with_request_id(
                         &json_rpc,
                         -32605,
                         "Internal Error: Failed to decode hex of id",
+                        &request_id,
                     ))
                 }
             };
@@ -308,7 +315,7 @@ where
                 "method" => "unknown"
             )
             .record(req_start.elapsed().as_secs_f64());
-            Ok(rpc_error(&json_rpc, -32601, "Method not found"))
+            Ok(rpc_error_with_request_id(&json_rpc, -32601, "Method not found", &request_id))
         }
     };
 
@@ -386,7 +393,7 @@ async fn process_add_assertion(
         Ok(ser) => ser,
         Err(err) => {
             warn!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Failed to serialize assertion for database storage");
-            return Ok(rpc_error(json_rpc, -32603, "Internal error d"));
+            return Ok(rpc_error_with_request_id(json_rpc, -32603, "Internal error d", &request_id));
         }
     };
 
@@ -409,7 +416,7 @@ async fn process_add_assertion(
         },
         Err(err) => {
             warn!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Database operation failed for assertion storage");
-            Ok(rpc_error(json_rpc, -32603, "Internal error c"))
+            Ok(rpc_error_with_request_id(json_rpc, -32603, "Internal error c", &request_id))
         },
     }
 }
@@ -447,7 +454,7 @@ async fn process_get_assertion(
         }
         None => {
             warn!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Assertion not found in database");
-            Ok(rpc_error(json_rpc, 404, "Assertion not found"))
+            Ok(rpc_error_with_request_id(json_rpc, 404, "Assertion not found", &request_id))
         },
     }
 }
@@ -467,6 +474,21 @@ fn rpc_error(request: &Value, code: i128, message: &str) -> String {
         "error": {
             "code": code,
             "message": message
+        },
+        "id": request["id"]
+    })
+    .to_string()
+}
+
+fn rpc_error_with_request_id(request: &Value, code: i128, message: &str, request_id: &Uuid) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "error": {
+            "code": code,
+            "message": message,
+            "data": {
+                "request_id": request_id.to_string()
+            }
         },
         "id": request["id"]
     })
