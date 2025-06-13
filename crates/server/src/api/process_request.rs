@@ -60,6 +60,7 @@ use hyper::{
 use tracing::{
     debug,
     info,
+    warn,
 };
 
 /// Matches the incoming method sent by a client to a corresponding function.
@@ -96,13 +97,19 @@ where
         "da_submit_assertion" => {
             let code = match json_rpc["params"][0].as_str() {
                 Some(code) => code,
-                _ => return Ok(rpc_error(&json_rpc, -32602, "Invalid params")),
+                _ => {
+                    warn!(target: "json_rpc", method = "da_submit_assertion", "Invalid params: missing or invalid bytecode parameter");
+                    return Ok(rpc_error(&json_rpc, -32602, "Invalid params"));
+                }
             };
 
             // Validate hex inputs
             let bytecode = match alloy::hex::decode(code.trim_start_matches("0x")) {
                 Ok(code) => code,
-                _ => return Ok(rpc_error(&json_rpc, 500, "Failed to decode hex")),
+                _ => {
+                    warn!(target: "json_rpc", method = "da_submit_assertion", code = code, "Failed to decode hex bytecode");
+                    return Ok(rpc_error(&json_rpc, 500, "Failed to decode hex"));
+                }
             };
 
             debug!(target: "json_rpc", bytecode_len = bytecode.len(), "Submitting raw assertion bytecode");
@@ -111,7 +118,8 @@ where
             let id = keccak256(&bytecode);
             let signature = match signer.sign_hash(&id).await {
                 Ok(sig) => sig,
-                Err(_) => {
+                Err(err) => {
+                    warn!(target: "json_rpc", method = "da_submit_assertion", error = %err, "Failed to sign assertion");
                     return Ok(rpc_error(
                         &json_rpc,
                         -32604,
@@ -121,6 +129,7 @@ where
             };
 
             debug!(target: "json_rpc", ?id, ?signature, bytecode_hex = hex::encode(&bytecode), "Compiled solidity source");
+            info!(target: "json_rpc", method = "da_submit_assertion", ?id, "Successfully processed raw assertion submission");
 
             let stored_assertion = StoredAssertion::new(
                 "NaN".to_string(),
@@ -146,6 +155,7 @@ where
                 match serde_json::from_value(json_rpc["params"][0].clone()) {
                     Ok(da_submission) => da_submission,
                     Err(err) => {
+                        warn!(target: "json_rpc", method = "da_submit_solidity_assertion", error = %err, "Failed to parse DaSubmission payload");
                         return Ok(rpc_error(
                             &json_rpc,
                             -32602,
@@ -166,6 +176,7 @@ where
             {
                 Ok(bytecode) => bytecode,
                 Err(err) => {
+                    warn!(target: "json_rpc", method = "da_submit_solidity_assertion", error = %err, compiler_version = da_submission.compiler_version, contract_name = da_submission.assertion_contract_name, "Solidity compilation failed");
                     return Ok(rpc_error(
                         &json_rpc,
                         -32603,
@@ -180,6 +191,7 @@ where
             ) {
                 Ok(encoded_args) => encoded_args,
                 Err(err) => {
+                    warn!(target: "json_rpc", method = "da_submit_solidity_assertion", error = %err, constructor_abi = da_submission.constructor_abi_signature, "Constructor args ABI encoding failed");
                     return Ok(rpc_error(
                         &json_rpc,
                         -32603,
@@ -195,7 +207,8 @@ where
             let id = keccak256(&deployment_data);
             let prover_signature = match signer.sign_hash(&id).await {
                 Ok(sig) => sig,
-                Err(_) => {
+                Err(err) => {
+                    warn!(target: "json_rpc", method = "da_submit_solidity_assertion", error = %err, "Failed to sign assertion");
                     return Ok(rpc_error(
                         &json_rpc,
                         -32604,
@@ -205,6 +218,8 @@ where
             };
 
             debug!(target: "json_rpc", ?id, ?prover_signature, bytecode_hex = ?deployment_data, "Compiled solidity source");
+
+            info!(target: "json_rpc", method = "da_submit_solidity_assertion", ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled and processed Solidity assertion");
 
             let stored_assertion = StoredAssertion::new(
                 da_submission.assertion_contract_name,
@@ -229,6 +244,7 @@ where
             let id = match json_rpc["params"][0].as_str() {
                 Some(id) => id,
                 None => {
+                    warn!(target: "json_rpc", method = "da_get_assertion", "Invalid params: missing id parameter");
                     return Ok(rpc_error(
                         &json_rpc,
                         -32602,
@@ -241,6 +257,7 @@ where
             let id: B256 = match id.trim_start_matches("0x").parse() {
                 Ok(id) => id,
                 _ => {
+                    warn!(target: "json_rpc", method = "da_get_assertion", id = id, "Failed to decode hex ID");
                     return Ok(rpc_error(
                         &json_rpc,
                         -32605,
@@ -252,6 +269,13 @@ where
             debug!(target: "json_rpc", ?id, "Getting assertion");
 
             let res = process_get_assertion(id, db, &json_rpc).await;
+            
+            // Log success for get_assertion if not an error response
+            if let Ok(ref response) = res {
+                if !response.contains("\"error\"") {
+                    info!(target: "json_rpc", method = "da_get_assertion", ?id, "Successfully retrieved assertion");
+                }
+            }
             histogram!(
                 "da_request_duration_seconds",
                 "method" => "get_assertion",
@@ -261,6 +285,7 @@ where
             res
         }
         _ => {
+            warn!(target: "json_rpc", method = method, "Unknown JSON-RPC method");
             gauge!("api_requests_active", &labels).decrement(1);
             counter!("api_requests_error_count", &labels).increment(1);
             histogram!(
@@ -271,6 +296,20 @@ where
             Ok(rpc_error(&json_rpc, -32601, "Method not found"))
         }
     };
+
+    // Log final request completion status
+    match &result {
+        Ok(response) => {
+            if response.contains("\"error\"") {
+                debug!(target: "json_rpc", %method, duration_ms = req_start.elapsed().as_millis(), "Request completed with error");
+            } else {
+                info!(target: "json_rpc", %method, duration_ms = req_start.elapsed().as_millis(), "Request completed successfully");
+            }
+        },
+        Err(err) => {
+            warn!(target: "json_rpc", %method, error = %err, duration_ms = req_start.elapsed().as_millis(), "Request failed with internal error");
+        },
+    }
 
     result
 }
@@ -327,7 +366,8 @@ async fn process_add_assertion(
 
     let ser_assertion = match bincode::serialize(&stored_assertion) {
         Ok(ser) => ser,
-        Err(_) => {
+        Err(err) => {
+            warn!(target: "json_rpc", error = %err, "Failed to serialize assertion for database storage");
             return Ok(rpc_error(json_rpc, -32603, "Internal error d"));
         }
     };
@@ -345,8 +385,14 @@ async fn process_add_assertion(
     };
 
     match rx.await {
-        Ok(_) => Ok(rpc_response(json_rpc, result)),
-        Err(_) => Ok(rpc_error(json_rpc, -32603, "Internal error c")),
+        Ok(_) => {
+            info!(target: "json_rpc", ?id, "Successfully stored assertion in database");
+            Ok(rpc_response(json_rpc, result))
+        },
+        Err(err) => {
+            warn!(target: "json_rpc", error = %err, "Database operation failed for assertion storage");
+            Ok(rpc_error(json_rpc, -32603, "Internal error c"))
+        },
     }
 }
 
@@ -374,7 +420,10 @@ async fn process_get_assertion(id: B256, db: &DbRequestSender, json_rpc: &Value)
 
             Ok(rpc_response(json_rpc, result))
         }
-        None => Ok(rpc_error(json_rpc, 404, "Assertion not found")),
+        None => {
+            warn!(target: "json_rpc", ?id, "Assertion not found in database");
+            Ok(rpc_error(json_rpc, 404, "Assertion not found"))
+        },
     }
 }
 
