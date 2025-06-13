@@ -524,6 +524,7 @@ fn rpc_response<T: Serialize>(request: &Value, result: T) -> String {
     .to_string()
 }
 
+#[allow(dead_code)]
 fn rpc_error(request: &Value, code: i128, message: &str) -> String {
     json!({
         "jsonrpc": "2.0",
