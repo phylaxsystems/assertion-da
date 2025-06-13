@@ -76,7 +76,14 @@ macro_rules! accept {
                     let signer_clone = signer_clone.clone();
                     let docker_clone = docker_clone.clone();
                     async move {
-                        $crate::api::accept::accept_request(req, db_c, &signer_clone, docker_clone, client_addr).await
+                        $crate::api::accept::accept_request(
+                            req,
+                            db_c,
+                            &signer_clone,
+                            docker_clone,
+                            client_addr,
+                        )
+                        .await
                     }
                 }),
             )
