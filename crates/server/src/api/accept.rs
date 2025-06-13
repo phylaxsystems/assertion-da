@@ -35,13 +35,14 @@ pub async fn accept_request<B>(
     db: DbRequestSender,
     signer: &PrivateKeySigner,
     docker: Arc<Docker>,
+    client_addr: std::net::SocketAddr,
 ) -> Result<hyper::Response<Full<Bytes>>, Infallible>
 where
     B: hyper::body::Body<Error = Error>,
 {
     tracing::debug!(target = "api::accept_request", "Incoming request");
     // Respond accordingly
-    let resp = match match_method(tx, &db, signer, docker).await {
+    let resp = match match_method(tx, &db, signer, docker, client_addr).await {
         Ok(rax) => rax,
         Err(e) => {
             let e = e.to_string();
@@ -58,18 +59,25 @@ macro_rules! accept {
         $io:expr,
         $db:expr,
         $signer:expr,
-        $docker:expr
+        $docker:expr,
+        $client_addr:expr
     ) => {
         let db_c = $db.clone();
+        let signer_clone = $signer.clone();
+        let docker_clone = $docker.clone();
+        let client_addr = $client_addr;
         // Bind the incoming connection to our service
         if let Err(err) = hyper::server::conn::http1::Builder::new()
             // `service_fn` converts our function in a `Service`
             .serve_connection(
                 $io,
-                hyper::service::service_fn(|req| {
-                    let response =
-                        $crate::api::accept::accept_request(req, db_c.clone(), $signer, $docker);
-                    response
+                hyper::service::service_fn(move |req| {
+                    let db_c = db_c.clone();
+                    let signer_clone = signer_clone.clone();
+                    let docker_clone = docker_clone.clone();
+                    async move {
+                        $crate::api::accept::accept_request(req, db_c, &signer_clone, docker_clone, client_addr).await
+                    }
                 }),
             )
             .with_upgrades()
