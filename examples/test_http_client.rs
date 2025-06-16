@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ HTTPS client created successfully");
 
     let bytes: FixedBytes<32> =
-        FixedBytes::from_str("43ccaf21bc5cf9efce72530ecfecbd6d513e895546749720048e0e39bbedce37")
+        FixedBytes::from_str("43ccaf21bc5cf9efce72530ecfecbd6d513e895546749720048e0e39bbedce37") // example id
             .expect("REASON");
     let rax = https_client.fetch_assertion(bytes).await.unwrap();
     println!("Fetched assertion: {rax:?}");
