@@ -160,7 +160,7 @@ where
             };
 
             debug!(target: "json_rpc", ?id, ?signature, bytecode_hex = hex::encode(&bytecode), "Compiled solidity source");
-            info!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Successfully processed raw assertion submission");
+            debug!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Processed raw assertion submission, proceeding to database storage");
 
             let stored_assertion = StoredAssertion::new(
                 "NaN".to_string(),
@@ -264,7 +264,7 @@ where
 
             debug!(target: "json_rpc", ?id, ?prover_signature, bytecode_hex = ?deployment_data, "Compiled solidity source");
 
-            info!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled and processed Solidity assertion");
+            debug!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled Solidity assertion, proceeding to database storage");
 
             let stored_assertion = StoredAssertion::new(
                 da_submission.assertion_contract_name,
