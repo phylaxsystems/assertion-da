@@ -261,10 +261,7 @@ where
                     ));
                 }
             };
-
             debug!(target: "json_rpc", ?id, ?prover_signature, bytecode_hex = ?deployment_data, "Compiled solidity source");
-
-            debug!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled Solidity assertion, proceeding to database storage");
 
             let stored_assertion = StoredAssertion::new(
                 da_submission.assertion_contract_name,
@@ -286,6 +283,15 @@ where
                 &json_rpc_id,
             )
             .await;
+
+            if let Ok(ref response) = res {
+                if !response.contains("\"error\"") {
+                    info!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled Solidity assertion");
+                } else {
+                    warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Failed to process Solidity assertion");
+                }
+            }
+
             histogram!(
                 "da_request_duration_seconds",
                 "method" => "submit_solidity_assertion",
@@ -457,11 +463,11 @@ async fn process_add_assertion(
 
     match rx.await {
         Ok(_) => {
-            info!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Successfully stored assertion in database");
+            debug!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Successfully stored assertion in database");
             Ok(rpc_response(json_rpc, result))
         }
         Err(err) => {
-            warn!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Database operation failed for assertion storage");
+            debug!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Database operation failed for assertion storage");
             Ok(rpc_error_with_request_id(
                 json_rpc,
                 -32603,
