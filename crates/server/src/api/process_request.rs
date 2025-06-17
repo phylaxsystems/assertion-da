@@ -182,6 +182,16 @@ where
                 &json_rpc_id,
             )
             .await;
+
+            // Log success or failure based on response
+            if let Ok(ref response) = res {
+                if !response.contains("\"error\"") {
+                    info!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Successfully processed raw assertion submission");
+                } else {
+                    warn!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Failed to process raw assertion submission");
+                }
+            }
+
             histogram!(
                 "da_request_duration_seconds",
                 "method" => "submit_solidity_assertion",
