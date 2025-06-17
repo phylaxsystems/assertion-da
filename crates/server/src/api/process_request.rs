@@ -274,8 +274,8 @@ where
             debug!(target: "json_rpc", ?id, ?prover_signature, bytecode_hex = ?deployment_data, "Compiled solidity source");
 
             let stored_assertion = StoredAssertion::new(
-                da_submission.assertion_contract_name,
-                da_submission.compiler_version,
+                da_submission.assertion_contract_name.clone(),
+                da_submission.compiler_version.clone(),
                 da_submission.solidity_source,
                 deployment_data,
                 prover_signature,
