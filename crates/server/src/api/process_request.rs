@@ -62,6 +62,7 @@ use hyper::{
 use tracing::{
     debug,
     info,
+    trace,
     warn,
 };
 
@@ -159,7 +160,7 @@ where
                 }
             };
 
-            debug!(target: "json_rpc", ?id, ?signature, bytecode_hex = hex::encode(&bytecode), "Compiled solidity source");
+            trace!(target: "json_rpc", ?id, ?signature, bytecode_hex = hex::encode(&bytecode), "Raw submitted bytecode");
             debug!(target: "json_rpc", method = "da_submit_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Processed raw assertion submission, proceeding to database storage");
 
             let stored_assertion = StoredAssertion::new(
@@ -271,7 +272,7 @@ where
                     ));
                 }
             };
-            debug!(target: "json_rpc", ?id, ?prover_signature, bytecode_hex = ?deployment_data, "Compiled solidity source");
+            trace!(target: "json_rpc", ?id, ?prover_signature, bytecode_hex = ?deployment_data, "Compiled solidity source");
 
             let stored_assertion = StoredAssertion::new(
                 da_submission.assertion_contract_name.clone(),
