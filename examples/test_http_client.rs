@@ -1,3 +1,6 @@
+use std::str::FromStr;
+
+use alloy::primitives::FixedBytes;
 use assertion_da_client::DaClient;
 
 #[tokio::main]
@@ -9,8 +12,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test with HTTPS endpoint
     println!("Testing HTTPS endpoint...");
-    let _https_client = DaClient::new("https://demo-21-assertion-da.phylax.systems")?;
+    let https_client = DaClient::new("https://demo-21-assertion-da.phylax.systems")?;
     println!("✓ HTTPS client created successfully");
+
+    let bytes: FixedBytes<32> =
+        FixedBytes::from_str("43ccaf21bc5cf9efce72530ecfecbd6d513e895546749720048e0e39bbedce37") // example id
+            .expect("REASON");
+    let rax = https_client.fetch_assertion(bytes).await.unwrap();
+    println!("Fetched assertion: {rax:?}");
 
     // Test with authentication
     println!("Testing authenticated client...");

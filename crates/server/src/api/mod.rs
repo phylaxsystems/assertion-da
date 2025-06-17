@@ -176,7 +176,7 @@ fn serve_connection(
 
     // Spawn a tokio task to serve multiple connections concurrently
     tokio::task::spawn(async move {
-        crate::accept!(io, db_clone, &signer, docker_clone.clone());
+        crate::accept!(io, db_clone, &signer, docker_clone.clone(), socketaddr);
     });
 }
 
