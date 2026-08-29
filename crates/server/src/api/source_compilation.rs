@@ -104,6 +104,7 @@ pub struct DockerImageManager {
 }
 
 impl DockerImageManager {
+    #[must_use]
     pub fn new(docker: Arc<Docker>) -> Self {
         #[cfg(target_arch = "aarch64")]
         debug!(
