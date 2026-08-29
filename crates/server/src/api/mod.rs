@@ -119,11 +119,18 @@ use tokio::{
     sync::mpsc,
 };
 
-use anyhow::Result;
+use anyhow::{
+    Context,
+    Result,
+};
 
 use alloy::signers::local::PrivateKeySigner;
 
 /// Start the API server
+///
+/// # Errors
+///
+/// Returns an error when the private key is invalid or the listener fails.
 pub async fn serve(
     listener: TcpListener,
     db_tx: mpsc::UnboundedSender<DbRequest>,
@@ -131,21 +138,21 @@ pub async fn serve(
     pk_str: String,
     cancel_token: CancellationToken,
 ) -> Result<()> {
-    let pk_bytes = pk_str.parse().expect("Invalid Private Key");
+    let pk_bytes = pk_str.parse().context("invalid private key")?;
     let signer =
-        PrivateKeySigner::from_bytes(&pk_bytes).expect("Failed to create private key signer");
+        PrivateKeySigner::from_bytes(&pk_bytes).context("failed to create private key signer")?;
 
     // We start a loop to continuously accept incoming connections
     loop {
         tokio::select! {
-                _ = cancel_token.cancelled() => {
+                () = cancel_token.cancelled() => {
                     tracing::info!("Api received cancellation signal, shutting down...");
                     break;
                 }
                 res = listener.accept() => {
                     match res {
                         Ok((stream, socketaddr)) => {
-                            serve_connection(socketaddr, db_tx.clone(), docker.clone(), signer.clone(), stream);
+                            serve_connection(socketaddr, &db_tx, &docker, signer.clone(), stream);
                         }
                         Err(err) => {
                             tracing::error!(?err, "Error accepting connection");
@@ -160,8 +167,8 @@ pub async fn serve(
 
 fn serve_connection(
     socketaddr: SocketAddr,
-    db_tx: mpsc::UnboundedSender<DbRequest>,
-    docker: Arc<Docker>,
+    db_tx: &mpsc::UnboundedSender<DbRequest>,
+    docker: &Arc<Docker>,
     signer: PrivateKeySigner,
     stream: TcpStream,
 ) {

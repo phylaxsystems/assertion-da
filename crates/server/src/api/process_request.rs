@@ -302,10 +302,10 @@ where
             .await;
 
             if let Ok(ref response) = res {
-                if !response.contains("\"error\"") {
-                    info!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled Solidity assertion");
-                } else {
+                if response.contains("\"error\"") {
                     warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Failed to process Solidity assertion");
+                } else {
+                    info!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, contract_name = da_submission.assertion_contract_name, compiler_version = da_submission.compiler_version, "Successfully compiled Solidity assertion");
                 }
             }
 
@@ -318,32 +318,27 @@ where
             res
         }
         "da_get_assertion" => {
-            let id = match json_rpc["params"][0].as_str() {
-                Some(id) => id,
-                None => {
-                    warn!(target: "json_rpc", method = "da_get_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, "Invalid params: missing id parameter");
-                    return Ok(rpc_error_with_request_id(
-                        &json_rpc,
-                        -32602,
-                        "Invalid params: Didn't find id",
-                        &request_id,
-                    ));
-                }
+            let Some(id) = json_rpc["params"][0].as_str() else {
+                warn!(target: "json_rpc", method = "da_get_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, "Invalid params: missing id parameter");
+                return Ok(rpc_error_with_request_id(
+                    &json_rpc,
+                    -32602,
+                    "Invalid params: Didn't find id",
+                    &request_id,
+                ));
             };
 
             // Validate hex input
-            let id: B256 = match id.trim_start_matches("0x").parse() {
-                Ok(id) => id,
-                _ => {
-                    warn!(target: "json_rpc", method = "da_get_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, id = id, "Failed to decode hex ID");
-                    return Ok(rpc_error_with_request_id(
-                        &json_rpc,
-                        -32605,
-                        "Internal Error: Failed to decode hex of id",
-                        &request_id,
-                    ));
-                }
+            let Ok(decoded_id) = id.trim_start_matches("0x").parse() else {
+                warn!(target: "json_rpc", method = "da_get_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, id = id, "Failed to decode hex ID");
+                return Ok(rpc_error_with_request_id(
+                    &json_rpc,
+                    -32605,
+                    "Internal Error: Failed to decode hex of id",
+                    &request_id,
+                ));
             };
+            let id: B256 = decoded_id;
 
             debug!(target: "json_rpc", ?id, "Getting assertion");
 
@@ -505,48 +500,43 @@ async fn process_get_assertion(
 ) -> Result<String> {
     let res = db::get_value(db, id.to_vec()).await?;
 
-    match res {
-        Some(val) => {
-            let stored_assertion: StoredAssertion = bincode::deserialize(&val)?;
-            let compiler_abi = compiler_abi::resolve(
-                db,
-                id,
-                LegacyCompilerArtifact {
-                    contract_name: &stored_assertion.assertion_contract_name,
-                    compiler_version: &stored_assertion.compiler_version,
-                    source: &stored_assertion.solidity_source,
-                    deployment_bytecode: &stored_assertion.bytecode,
-                },
-                docker,
-            )
-            .await?;
-            let has_compiler_metadata = !stored_assertion.solidity_source.is_empty();
+    let Some(val) = res else {
+        warn!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Assertion not found in database");
+        return Ok(rpc_error_with_request_id(
+            json_rpc,
+            404,
+            "Assertion not found",
+            &request_id,
+        ));
+    };
+    let stored_assertion: StoredAssertion = bincode::deserialize(&val)?;
+    let compiler_abi = compiler_abi::resolve(
+        db,
+        id,
+        LegacyCompilerArtifact {
+            contract_name: &stored_assertion.assertion_contract_name,
+            compiler_version: &stored_assertion.compiler_version,
+            source: &stored_assertion.solidity_source,
+            deployment_bytecode: &stored_assertion.bytecode,
+        },
+        docker,
+    )
+    .await?;
+    let has_compiler_metadata = !stored_assertion.solidity_source.is_empty();
 
-            let result = DaFetchResponse {
-                solidity_source: stored_assertion.solidity_source,
-                bytecode: stored_assertion.bytecode.into(),
-                prover_signature: stored_assertion.prover_signature.as_bytes().into(),
-                encoded_constructor_args: stored_assertion.encoded_constructor_args,
-                constructor_abi_signature: stored_assertion.constructor_abi_signature,
-                assertion_contract_name: has_compiler_metadata
-                    .then_some(stored_assertion.assertion_contract_name),
-                compiler_version: has_compiler_metadata
-                    .then_some(stored_assertion.compiler_version),
-                abi: compiler_abi,
-            };
+    let result = DaFetchResponse {
+        solidity_source: stored_assertion.solidity_source,
+        bytecode: stored_assertion.bytecode.into(),
+        prover_signature: stored_assertion.prover_signature.as_bytes().into(),
+        encoded_constructor_args: stored_assertion.encoded_constructor_args,
+        constructor_abi_signature: stored_assertion.constructor_abi_signature,
+        assertion_contract_name: has_compiler_metadata
+            .then_some(stored_assertion.assertion_contract_name),
+        compiler_version: has_compiler_metadata.then_some(stored_assertion.compiler_version),
+        abi: compiler_abi,
+    };
 
-            Ok(rpc_response(json_rpc, result))
-        }
-        None => {
-            warn!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Assertion not found in database");
-            Ok(rpc_error_with_request_id(
-                json_rpc,
-                404,
-                "Assertion not found",
-                &request_id,
-            ))
-        }
-    }
+    Ok(rpc_response(json_rpc, result))
 }
 
 fn rpc_response<T: Serialize>(request: &Value, result: T) -> String {
@@ -652,7 +642,7 @@ mod tests {
 
         // Start the database listener
         tokio::spawn(async move {
-            listen_for_db(db_receiver, db, CancellationToken::new())
+            Box::pin(listen_for_db(db_receiver, db, CancellationToken::new()))
                 .await
                 .unwrap();
         });
@@ -663,7 +653,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "debug_assertions")]
     async fn test_submit_assertion() {
-        let (_temp_dir, _db_sender, _signer, server_url) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, server_url) = Box::pin(setup_test_env()).await;
 
         // Bytecode for a simple contract
         let bytecode = "608060405234801561001057600080fd5b50610150806100206000396000f3fe608060405234801561001057600080fd5b50600436106100365760003560e01c80632e64cec11461003b5780636057361d14610059575b600080fd5b610043610075565b60405161005091906100a1565b60405180910390f35b610073600480360381019061006e91906100ed565b61007e565b005b60008054905090565b8060008190555050565b6000819050919050565b61009b81610088565b82525050565b60006020820190506100b66000830184610092565b92915050565b600080fd5b6100ca81610088565b81146100d557600080fd5b50565b6000813590506100e7816100c1565b92915050565b600060208284031215610103576101026100bc565b5b6000610111848285016100d8565b9150509291505056fea2646970667358221220ec5ef0b1d98f01639556c6ea2467c504e5f0d7d7c6eb9b622bb6d8ac93d5fed464736f6c63430008110033";
@@ -697,9 +687,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_submit_solidity_assertion() {
-        let (_temp_dir, _db_sender, _signer, server_url) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, server_url) = Box::pin(setup_test_env()).await;
 
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
@@ -714,7 +704,7 @@ mod tests {
                     return value;
                 }
             }
-        "#;
+        ";
 
         let request_body = json!({
             "jsonrpc": "2.0",
@@ -806,7 +796,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_assertion() {
-        let (_temp_dir, db_sender, signer, server_url) = setup_test_env().await;
+        let (_temp_dir, db_sender, signer, server_url) = Box::pin(setup_test_env()).await;
 
         // First submit an assertion
         let source_code = "contract Test { }";
@@ -871,7 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nonexistent_assertion() {
-        let (_temp_dir, _db_sender, _signer, server_url) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, server_url) = Box::pin(setup_test_env()).await;
 
         let request_body = json!({
             "jsonrpc": "2.0",
@@ -899,7 +889,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_method() {
-        let (_temp_dir, _db_sender, _signer, server_url) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, server_url) = Box::pin(setup_test_env()).await;
 
         let request_body = json!({
             "jsonrpc": "2.0",

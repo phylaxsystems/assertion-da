@@ -1107,7 +1107,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "metrics",
- "once_cell",
  "reqwest",
  "rust-tracing",
  "semver 1.0.26",

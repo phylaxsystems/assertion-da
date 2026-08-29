@@ -42,6 +42,11 @@ impl DaServer {
         (Box::pin(api_handle), Box::pin(db_handle))
     }
     /// Run the server until the cancellation token is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either the API server or database listener fails while the other task
+    /// is shutting down.
     pub async fn run(self, cancel_token: CancellationToken) -> Result<()> {
         let (mut api_handle, mut db_handle) = self.start(cancel_token.clone());
         loop {
@@ -101,8 +106,8 @@ mod tests {
 
         // Create server instance
         let server = DaServer {
-            db,
             listener,
+            db,
             docker,
             private_key,
         };
@@ -113,7 +118,7 @@ mod tests {
 
         // Run server in background task
         let server_handle = tokio::spawn(async move {
-            server.run(cancel_token).await.unwrap();
+            Box::pin(server.run(cancel_token)).await.unwrap();
         });
 
         // Wait briefly to ensure server is running

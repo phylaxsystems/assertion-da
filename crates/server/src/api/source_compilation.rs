@@ -58,7 +58,7 @@ impl Default for SolcArgs {
             output_type: "bin,abi".to_string(),
             metadata_hash: "none".to_string(),
             combined_json: true,
-            file_path: "".to_string(),
+            file_path: String::new(),
             base_path: None,
         }
     }
@@ -75,6 +75,7 @@ impl SolcArgs {
         self
     }
 
+    #[must_use]
     pub fn to_command_args(&self) -> Vec<String> {
         let mut args = Vec::new();
 
@@ -91,7 +92,7 @@ impl SolcArgs {
             args.push(base_path.clone());
         }
 
-        args.push(self.file_path.to_string());
+        args.push(self.file_path.clone());
 
         args
     }
@@ -114,6 +115,10 @@ impl DockerImageManager {
     }
 
     /// Ensures an image is available locally, pulling it if necessary
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Docker cannot inspect or pull the compiler image.
     pub async fn ensure_image_available(&self, image_name: &str) -> Result<(), CompilationError> {
         let mut attempts = 0;
         let mut delay = INITIAL_DELAY;
@@ -121,7 +126,7 @@ impl DockerImageManager {
         loop {
             attempts += 1;
             match self.try_ensure_image_available(image_name).await {
-                Ok(_) => return Ok(()),
+                Ok(()) => return Ok(()),
                 Err(e) => {
                     if attempts >= MAX_ATTEMPTS {
                         return Err(e);
@@ -150,8 +155,10 @@ impl DockerImageManager {
             .iter()
             .any(|img| img.repo_tags.contains(&image_name.to_string()));
 
-        // Only pull the image if it doesn't exist locally
-        if !image_exists {
+        // Only pull the image if it does not exist locally.
+        if image_exists {
+            debug!(target: "solidity_compilation", image_name, "Solc image exists locally");
+        } else {
             debug!(target: "solidity_compilation", "Pulling image: {}", image_name);
             self.docker
                 .create_image(
@@ -165,8 +172,6 @@ impl DockerImageManager {
                 )
                 .try_collect::<Vec<_>>()
                 .await?;
-        } else {
-            debug!(target: "solidity_compilation", image_name, "Solc image exists locally");
         }
         Ok(())
     }
@@ -182,6 +187,7 @@ pub struct ContainerManager {
 
 impl ContainerManager {
     /// Create a new container manager
+    #[must_use]
     pub fn new(docker: Arc<Docker>, name_prefix: &str) -> Self {
         let container_name = format!("{}_{}", name_prefix, Uuid::new_v4());
         Self {
@@ -193,6 +199,10 @@ impl ContainerManager {
     }
 
     /// Create and start a container with the given configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Docker cannot create or start the container.
     pub async fn create_and_start(
         &mut self,
         image: &str,
@@ -227,6 +237,10 @@ impl ContainerManager {
             .await?;
 
         self.container_id = Some(container.id);
+        let container_id = self
+            .container_id
+            .as_deref()
+            .ok_or(CompilationError::NoContainerCreated)?;
 
         debug!(
             target: "solidity_compilation",
@@ -235,16 +249,18 @@ impl ContainerManager {
         );
 
         self.docker
-            .start_container(
-                self.container_id.as_ref().unwrap(),
-                None::<StartContainerOptions<String>>,
-            )
+            .start_container(container_id, None::<StartContainerOptions<String>>)
             .await?;
 
         Ok(())
     }
 
     /// Wait for the container to finish and return its exit code
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no container exists, Docker fails, the wait stream ends early, or
+    /// compilation fails.
     pub async fn wait_for_exit(&self) -> Result<i64, CompilationError> {
         let container_id = self
             .container_id
@@ -281,6 +297,10 @@ impl ContainerManager {
     }
 
     /// Get container logs
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no container exists or Docker cannot read its logs.
     pub async fn get_logs(&self, stdout: bool, stderr: bool) -> Result<String, CompilationError> {
         let container_id = self
             .container_id
@@ -317,17 +337,24 @@ impl ContainerManager {
     }
 
     /// Get the container name
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.container_name
     }
 
     /// Explicitly clean up the container
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Docker cannot remove the container.
     pub async fn cleanup(&mut self) -> Result<(), CompilationError> {
-        if self.is_cleaned_up || self.container_id.is_none() {
+        if self.is_cleaned_up {
             return Ok(());
         }
 
-        let container_id = self.container_id.as_ref().unwrap();
+        let Some(container_id) = self.container_id.as_ref() else {
+            return Ok(());
+        };
 
         debug!(
             target: "solidity_compilation",
@@ -359,6 +386,10 @@ pub struct SoliditySourceFile {
 
 impl SoliditySourceFile {
     /// Create a new source file with the given content
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the temporary directory or source file cannot be created.
     pub fn new(source_code: &str) -> Result<Self, CompilationError> {
         let temp_dir = TempDir::new()?;
         let file_name = format!("{}.sol", Uuid::new_v4());
@@ -373,16 +404,22 @@ impl SoliditySourceFile {
     }
 
     /// Get the file name
+    #[must_use]
     pub fn file_name(&self) -> &str {
         &self.file_name
     }
 
     /// Get the file path
+    #[must_use]
     pub fn file_path(&self) -> &std::path::Path {
         &self.file_path
     }
 
     /// Get the container path configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the temporary directory path is not valid UTF-8.
     pub fn container_paths(&self) -> Result<(String, String, Vec<String>), CompilationError> {
         let container_root_path = "/code".to_string();
         let container_file_path = format!("{}/{}", container_root_path, self.file_name);
@@ -410,6 +447,7 @@ pub struct CompilationConfig {
 }
 
 impl CompilationConfig {
+    #[must_use]
     pub fn new(assertion_contract_name: &str, source_code: &str, compiler_version: &str) -> Self {
         Self {
             assertion_contract_name: assertion_contract_name.to_string(),
@@ -427,6 +465,7 @@ pub struct CompilationMetrics {
 }
 
 impl CompilationMetrics {
+    #[must_use]
     pub fn start(compiler_version: &str) -> Self {
         let metrics = Self {
             labels: [("compiler_version", compiler_version.to_string())],
@@ -449,11 +488,17 @@ pub struct SolidityCompiler {
 }
 
 impl SolidityCompiler {
+    #[must_use]
     pub fn new(docker: Arc<Docker>) -> Self {
         Self { docker }
     }
 
     /// Compiles a Solidity contract and returns its deployment bytecode and ABI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported compiler versions, Docker failures, source-file failures,
+    /// compilation failures, or invalid compiler output.
     pub async fn compile(
         &self,
         config: CompilationConfig,
@@ -589,6 +634,11 @@ fn extract_compilation_artifact(
 }
 
 /// Compiles Solidity source code using a Docker container with the specified compiler version
+///
+/// # Errors
+///
+/// Returns an error for unsupported compiler versions, Docker failures, compilation failures, or
+/// invalid compiler output.
 pub async fn compile_solidity(
     assertion_contract_name: &str,
     source_code: &str,
@@ -600,6 +650,7 @@ pub async fn compile_solidity(
     compiler.compile(config).await
 }
 
+#[must_use]
 pub fn is_supported_compiler_version(value: &str) -> bool {
     semver::Version::parse(value).is_ok_and(|version| {
         version.pre.is_empty() && version.build.is_empty() && version.to_string() == value
@@ -651,11 +702,11 @@ pub enum CompilationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     // Shared Docker client for all tests
-    static DOCKER: Lazy<Arc<Docker>> =
-        Lazy::new(|| Arc::new(Docker::connect_with_local_defaults().unwrap()));
+    static DOCKER: LazyLock<Arc<Docker>> =
+        LazyLock::new(|| Arc::new(Docker::connect_with_local_defaults().unwrap()));
 
     fn setup_docker() -> Arc<Docker> {
         DOCKER.clone()
@@ -664,7 +715,7 @@ mod tests {
     #[tokio::test]
     async fn test_successful_compilation() {
         let docker = setup_docker();
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
@@ -679,7 +730,7 @@ mod tests {
                     return value;
                 }
             }
-        "#;
+        ";
 
         let result = compile_solidity("SimpleStorage", source_code, "0.8.17", docker).await;
         assert!(result.is_ok(), "Compilation should succeed");
@@ -703,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_contracts() {
         let docker = setup_docker();
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
@@ -714,7 +765,7 @@ mod tests {
             contract Second {
                 string private name;
             }
-        "#;
+        ";
 
         let result = compile_solidity("First", source_code, "0.8.17", docker).await;
         assert!(result.is_ok(), "Should succeed with multiple contracts");
@@ -723,11 +774,11 @@ mod tests {
     #[tokio::test]
     async fn test_syntax_error() {
         let docker = setup_docker();
-        let source_code = r#"
+        let source_code = r"
             contract BrokenContract {
                 This is not valid Solidity;
             }
-        "#;
+        ";
 
         let result = compile_solidity("BrokenContract", source_code, "0.8.17", docker).await;
         assert!(result.is_err(), "Should fail with syntax error");
@@ -743,14 +794,14 @@ mod tests {
     #[tokio::test]
     async fn test_different_compiler_versions() {
         let docker = setup_docker();
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
             contract VersionTest {
                 uint256 private value;
             }
-        "#;
+        ";
 
         // Test multiple compiler versions
         let versions = vec!["0.8.17", "0.8.20", "0.8.24"];
@@ -788,14 +839,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_concurrent_compilations() {
         let docker = setup_docker();
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
             contract Simple {
                 uint256 private value;
             }
-        "#;
+        ";
 
         let mut handles = vec![];
 
@@ -891,7 +942,9 @@ mod tests {
         let source_file = SoliditySourceFile::new(source_code).unwrap();
 
         assert!(
-            source_file.file_name().ends_with(".sol"),
+            std::path::Path::new(source_file.file_name())
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("sol")),
             "File should have .sol extension"
         );
         assert!(
@@ -991,14 +1044,14 @@ mod tests {
     #[tokio::test]
     async fn test_container_cleanup_after_compilation() {
         let docker = setup_docker();
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
             contract CleanupTest {
                 uint256 private value;
             }
-        "#;
+        ";
 
         let result = compile_solidity("CleanupTest", source_code, "0.8.17", docker.clone()).await;
         assert!(result.is_ok(), "Compilation should succeed");
@@ -1055,23 +1108,21 @@ mod tests {
             .await
             .expect("Failed to list images");
 
-        let image_exists = images
-            .iter()
-            .any(|img| img.repo_tags.contains(&image_name.to_string()));
+        let image_exists = images.iter().any(|img| img.repo_tags.contains(&image_name));
 
         if image_exists {
             println!("Warning: Could not remove image for testing, test may be less reliable");
         }
 
         // Use a simple contract with a pragma that works with our specific version
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
             contract TestPull {
                 uint256 private value;
             }
-        "#;
+        ";
 
         // Run compilation which should trigger a pull
         let result = compile_solidity(
@@ -1096,7 +1147,7 @@ mod tests {
 
         let image_exists_after = images_after
             .iter()
-            .any(|img| img.repo_tags.contains(&image_name.to_string()));
+            .any(|img| img.repo_tags.contains(&image_name));
 
         assert!(image_exists_after, "Image should exist after compilation");
     }

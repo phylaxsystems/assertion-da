@@ -76,6 +76,10 @@ struct JsonRpcError {
 
 impl DaClient {
     /// Create a new DA client
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `da_url` is invalid or the HTTP client cannot be built.
     pub fn new(da_url: &str) -> Result<Self, DaClientError> {
         let base_url = Url::parse(da_url)?;
         let client = Client::builder().use_rustls_tls().build()?;
@@ -88,6 +92,11 @@ impl DaClient {
     }
 
     /// Create a new DA client with authentication
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the URL or authorization header is invalid, or when the HTTP client
+    /// cannot be built.
     pub fn new_with_auth(da_url: &str, auth: &str) -> Result<Self, DaClientError> {
         let base_url = Url::parse(da_url)?;
         let mut headers = header::HeaderMap::new();
@@ -174,6 +183,10 @@ impl DaClient {
     }
 
     /// Fetch the bytecode and signature for the given assertion id from the DA layer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the DA returns an invalid JSON-RPC response.
     pub async fn fetch_assertion(
         &self,
         assertion_id: B256,
@@ -183,6 +196,10 @@ impl DaClient {
     }
 
     /// Submit the assertion bytecode to the DA layer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the DA returns an invalid JSON-RPC response.
     pub async fn submit_assertion(
         &self,
         assertion_contract_name: String,
@@ -200,6 +217,10 @@ impl DaClient {
     }
 
     /// Submit the assertion bytecode with constructor args to the DA layer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the DA returns an invalid JSON-RPC response.
     pub async fn submit_assertion_with_args(
         &self,
         assertion_contract_name: String,
@@ -292,7 +313,7 @@ mod tests {
 
         // Start the database listener
         tokio::spawn(async move {
-            listen_for_db(db_receiver, db, CancellationToken::new())
+            Box::pin(listen_for_db(db_receiver, db, CancellationToken::new()))
                 .await
                 .unwrap();
         });
@@ -305,9 +326,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_submit_solidity_assertion() {
-        let (_temp_dir, _db_sender, _signer, client) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, client) = Box::pin(setup_test_env()).await;
 
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
@@ -322,7 +343,7 @@ mod tests {
                     return value;
                 }
             }
-        "#;
+        ";
 
         let response = client
             .submit_assertion(
@@ -339,7 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_get_assertion() {
-        let (_temp_dir, db_sender, signer, client) = setup_test_env().await;
+        let (_temp_dir, db_sender, signer, client) = Box::pin(setup_test_env()).await;
 
         // First submit an assertion directly to DB
         let source_code = "contract Test { }";
@@ -376,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nonexistent_assertion() {
-        let (_temp_dir, _db_sender, _signer, client) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, client) = Box::pin(setup_test_env()).await;
 
         let nonexistent_id = B256::ZERO;
         let result = client.fetch_assertion(nonexistent_id).await;
@@ -425,9 +446,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_submit_solidity_assertion_with_args() {
-        let (_temp_dir, _db_sender, _signer, client) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, client) = Box::pin(setup_test_env()).await;
 
-        let source_code = r#"
+        let source_code = r"
             // SPDX-License-Identifier: MIT
             pragma solidity ^0.8.0;
             
@@ -442,7 +463,7 @@ mod tests {
                     return value;
                 }
             }
-        "#;
+        ";
 
         let response = client
             .submit_assertion_with_args(
@@ -461,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_solidity_submission() {
-        let (_temp_dir, _db_sender, _signer, client) = setup_test_env().await;
+        let (_temp_dir, _db_sender, _signer, client) = Box::pin(setup_test_env()).await;
 
         // Invalid Solidity code (missing semicolon)
         let invalid_source = "contract Test { uint256 x = 5 }";
@@ -509,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_response_content_validation() {
-        let (_temp_dir, db_sender, signer, client) = setup_test_env().await;
+        let (_temp_dir, db_sender, signer, client) = Box::pin(setup_test_env()).await;
 
         // Create a test contract with specific bytecode
         let source_code = "contract Test { uint256 value; }";
@@ -583,7 +604,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
-            let result = client.fetch_assertion(Default::default()).await;
+            let result = client.fetch_assertion(B256::default()).await;
             assert!(result.is_err());
             match result.unwrap_err() {
                 DaClientError::InvalidResponse(msg) => {
@@ -614,7 +635,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
-            let result = client.fetch_assertion(Default::default()).await;
+            let result = client.fetch_assertion(B256::default()).await;
             assert!(result.is_err());
             match result.unwrap_err() {
                 DaClientError::InvalidResponse(msg) => {

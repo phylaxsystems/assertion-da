@@ -19,6 +19,10 @@ use tokio_util::sync::CancellationToken;
 
 /// Listens to a mpsc channel for database events and responds
 /// accordingly.
+///
+/// # Errors
+///
+/// Returns an error when a database operation fails.
 pub async fn listen_for_db(
     mut rx: mpsc::UnboundedReceiver<DbRequest>,
     db: Db<{ LEAF_FANOUT }>,
@@ -26,7 +30,7 @@ pub async fn listen_for_db(
 ) -> Result<()> {
     loop {
         tokio::select! {
-            _ = cancel_token.cancelled() => {
+            () = cancel_token.cancelled() => {
                 tracing::info!("Database listener received cancellation signal, shutting down...");
                 break;
             }
@@ -50,31 +54,31 @@ pub async fn listen_for_db(
     Ok(())
 }
 
-fn db_get(db: &Db<{ LEAF_FANOUT }>, key: &Vec<u8>) -> Result<Option<DbResponse>> {
-    let rax = db.get(key)?;
-    if rax.is_none() {
-        return Ok(None);
-    }
-    let rax = rax.unwrap().to_vec();
-    Ok(Some(DbResponse::Value(rax)))
+fn db_get(db: &Db<{ LEAF_FANOUT }>, key: &[u8]) -> Result<Option<DbResponse>> {
+    Ok(db.get(key)?.map(|value| DbResponse::Value(value.to_vec())))
 }
 
 fn db_insert(
     db: &Db<{ LEAF_FANOUT }>,
-    key: &Vec<u8>,
-    value: &Vec<u8>,
+    key: &[u8],
+    value: &[u8],
     count_assertion: bool,
 ) -> Result<()> {
     db.insert(key, value.to_owned())?;
 
     let db_size = db.size_on_disk()? / (1024 * 1024);
-    metrics::gauge!("db_size_mb").set(db_size as f64);
+    metrics::gauge!("db_size_mb").set(u32::try_from(db_size).unwrap_or(u32::MAX));
     if count_assertion {
         metrics::gauge!("database_assertions_sum").increment(1);
     }
     Ok(())
 }
 
+/// Reads a raw value through the database task.
+///
+/// # Errors
+///
+/// Returns an error when the request cannot be sent or its response channel closes.
 pub async fn get_value(db: &DbRequestSender, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
     let (response, receiver) = oneshot::channel();
     db.send(DbRequest {
@@ -88,10 +92,20 @@ pub async fn get_value(db: &DbRequestSender, key: Vec<u8>) -> Result<Option<Vec<
     }))
 }
 
+/// Inserts an assertion and updates assertion-count metrics.
+///
+/// # Errors
+///
+/// Returns an error when the request cannot be sent or its response channel closes.
 pub async fn insert_assertion(db: &DbRequestSender, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
     insert(db, DbOperation::Insert(key, value)).await
 }
 
+/// Inserts auxiliary metadata without changing assertion-count metrics.
+///
+/// # Errors
+///
+/// Returns an error when the request cannot be sent or its response channel closes.
 pub async fn insert_metadata(db: &DbRequestSender, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
     insert(db, DbOperation::InsertMetadata(key, value)).await
 }

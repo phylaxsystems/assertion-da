@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use bollard::Docker;
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -39,33 +40,36 @@ pub struct Config {
 }
 impl Config {
     /// Build the assertion DA Server
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the listener, data directory, database, or Docker connection cannot
+    /// be initialized.
     pub async fn build(self) -> anyhow::Result<DaServer> {
         // Bind to an address
         let listener = TcpListener::bind(&self.listen_addr).await?;
         tracing::info!(listen_addr = ?self.listen_addr, "Listening on address");
 
         // Get the database path
-        let root_dir =
-            directories::ProjectDirs::from("com", "phylaxsystems", "assertion-da").unwrap();
-        let db_path = if let Some(db_path) = &self.db_path {
-            db_path
-        } else {
-            &root_dir.data_dir().join("db")
-        };
+        let root_dir = directories::ProjectDirs::from("com", "phylaxsystems", "assertion-da")
+            .context("failed to resolve assertion-da data directory")?;
+        let db_path = self
+            .db_path
+            .unwrap_or_else(|| root_dir.data_dir().join("db"));
 
         // Try to open the sled db
         let db: Db<{ crate::LEAF_FANOUT }> = DbConfig::new()
-            .path(db_path.clone())
+            .path(&db_path)
             .cache_capacity_bytes(self.cache_size)
             .open()?;
 
         let db_size = db.size_on_disk()?;
         tracing::info!(
             database_size_mbs = db_size,
-            database_path = db_path.to_str().unwrap(),
+            database_path = %db_path.display(),
             "Opened database"
         );
-        metrics::gauge!("db_size_mb").set(db_size as u32);
+        metrics::gauge!("db_size_mb").set(u32::try_from(db_size).unwrap_or(u32::MAX));
 
         // Connect to Docker daemon
         let docker = Arc::new(Docker::connect_with_local_defaults()?);
@@ -75,7 +79,7 @@ impl Config {
             listener,
             db,
             docker,
-            private_key: self.private_key.clone(),
+            private_key: self.private_key,
         };
 
         Ok(server)
@@ -116,15 +120,16 @@ mod tests {
         let cancel_token_clone = cancel_token.clone();
 
         let task_handle = tokio::task::spawn(async move {
-            server.run(cancel_token_clone).await.unwrap();
+            Box::pin(server.run(cancel_token_clone)).await.unwrap();
         });
 
         std::thread::sleep(std::time::Duration::from_secs(1));
         let da_client =
             assertion_da_client::DaClient::new(&format!("http://{listen_addr}")).unwrap();
 
-        if let Err(DaClientError::JsonRpcError { code, message }) =
-            da_client.fetch_assertion(Default::default()).await
+        if let Err(DaClientError::JsonRpcError { code, message }) = da_client
+            .fetch_assertion(alloy::primitives::B256::default())
+            .await
         {
             assert_eq!(code, 404);
             assert_eq!(message, "Assertion not found");
@@ -146,7 +151,7 @@ mod tests {
         .unwrap();
 
         // Check default values
-        assert_eq!(config.cache_size, 1000000);
+        assert_eq!(config.cache_size, 1_000_000);
         assert_eq!(config.listen_addr, "0.0.0.0:5001".parse().unwrap());
         assert_eq!(config.log_level, LevelFilter::INFO);
         assert_eq!(config.metrics_addr.to_string(), "0.0.0.0:9002");
@@ -171,7 +176,7 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(config.cache_size, 2000000);
+        assert_eq!(config.cache_size, 2_000_000);
         assert_eq!(config.listen_addr, "127.0.0.1:8080".parse().unwrap());
         assert_eq!(config.log_level, LevelFilter::DEBUG);
         assert_eq!(config.db_path, Some(PathBuf::from("/tmp/test-db")));
