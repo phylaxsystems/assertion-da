@@ -6,13 +6,13 @@ use std::{
 
 use crate::{
     api::{
-        source_compilation::compile_solidity,
-        types::{
-            DbOperation,
-            DbRequest,
-            DbRequestSender,
-            DbResponse,
+        compiler_abi::{
+            self,
+            LegacyCompilerArtifact,
         },
+        db,
+        source_compilation::compile_solidity,
+        types::DbRequestSender,
     },
     encode_args::encode_constructor_args,
 };
@@ -24,6 +24,7 @@ use assertion_da_core::{
 };
 
 use alloy::{
+    json_abi::JsonAbi,
     primitives::{
         keccak256,
         Bytes,
@@ -51,7 +52,6 @@ use serde_json::{
     json,
     Value,
 };
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use http_body_util::BodyExt;
@@ -175,7 +175,10 @@ where
 
             let res = process_add_assertion(
                 id,
-                stored_assertion,
+                StoredAssertionArtifact {
+                    assertion: stored_assertion,
+                    compiler_abi: None,
+                },
                 db,
                 &json_rpc,
                 request_id,
@@ -219,7 +222,7 @@ where
 
             debug!(target: "json_rpc", compiler_version = da_submission.compiler_version, da_submission.solidity_source , "Compiling solidity source");
 
-            let bytecode = match compile_solidity(
+            let compilation = match compile_solidity(
                 da_submission.assertion_contract_name.as_str(),
                 da_submission.solidity_source.as_str(),
                 da_submission.compiler_version.as_str(),
@@ -227,7 +230,7 @@ where
             )
             .await
             {
-                Ok(bytecode) => bytecode,
+                Ok(compilation) => compilation,
                 Err(err) => {
                     warn!(target: "json_rpc", method = "da_submit_solidity_assertion", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, compiler_version = da_submission.compiler_version, contract_name = da_submission.assertion_contract_name, "Solidity compilation failed");
                     return Ok(rpc_error_with_request_id(
@@ -255,7 +258,7 @@ where
                 }
             };
 
-            let mut deployment_data = bytecode.clone();
+            let mut deployment_data = compilation.bytecode;
             deployment_data.extend_from_slice(&encoded_constructor_args);
 
             // Hash to get ID
@@ -286,7 +289,10 @@ where
 
             let res = process_add_assertion(
                 id,
-                stored_assertion,
+                StoredAssertionArtifact {
+                    assertion: stored_assertion,
+                    compiler_abi: Some(compilation.abi),
+                },
                 db,
                 &json_rpc,
                 request_id,
@@ -341,9 +347,16 @@ where
 
             debug!(target: "json_rpc", ?id, "Getting assertion");
 
-            let res =
-                process_get_assertion(id, db, &json_rpc, request_id, &client_ip, &json_rpc_id)
-                    .await;
+            let res = process_get_assertion(
+                id,
+                db,
+                docker,
+                &json_rpc,
+                request_id,
+                &client_ip,
+                &json_rpc_id,
+            )
+            .await;
 
             // Log success for get_assertion if not an error response
             if let Ok(ref response) = res {
@@ -413,6 +426,11 @@ pub struct StoredAssertion {
     pub encoded_constructor_args: Bytes,
 }
 
+struct StoredAssertionArtifact {
+    assertion: StoredAssertion,
+    compiler_abi: Option<JsonAbi>,
+}
+
 impl StoredAssertion {
     pub fn new(
         assertion_contract_name: impl Into<String>,
@@ -437,16 +455,17 @@ impl StoredAssertion {
 
 async fn process_add_assertion(
     id: B256,
-    stored_assertion: StoredAssertion,
+    artifact: StoredAssertionArtifact,
     db: &DbRequestSender,
     json_rpc: &Value,
     request_id: Uuid,
     client_ip: &str,
     json_rpc_id: &Value,
 ) -> Result<String> {
-    // Store in database
-    let (tx, rx) = oneshot::channel();
-
+    let StoredAssertionArtifact {
+        assertion: stored_assertion,
+        compiler_abi,
+    } = artifact;
     let ser_assertion = match bincode::serialize(&stored_assertion) {
         Ok(ser) => ser,
         Err(err) => {
@@ -460,55 +479,48 @@ async fn process_add_assertion(
         }
     };
 
-    let req = DbRequest {
-        request: DbOperation::Insert(id.to_vec(), ser_assertion),
-        response: tx,
-    };
+    if let Some(abi) = compiler_abi {
+        compiler_abi::store(db, id, abi).await?;
+    }
 
-    db.send(req)?;
+    db::insert_assertion(db, id.to_vec(), ser_assertion).await?;
 
     let result = DaSubmissionResponse {
         id,
         prover_signature: stored_assertion.prover_signature.as_bytes().into(),
     };
 
-    match rx.await {
-        Ok(_) => {
-            debug!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Successfully stored assertion in database");
-            Ok(rpc_response(json_rpc, result))
-        }
-        Err(err) => {
-            debug!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, error = %err, "Database operation failed for assertion storage");
-            Ok(rpc_error_with_request_id(
-                json_rpc,
-                -32603,
-                "Internal error c",
-                &request_id,
-            ))
-        }
-    }
+    debug!(target: "json_rpc", %request_id, %client_ip, json_rpc_id = %json_rpc_id, ?id, "Successfully stored assertion in database");
+    Ok(rpc_response(json_rpc, result))
 }
 
 async fn process_get_assertion(
     id: B256,
     db: &DbRequestSender,
+    docker: Arc<Docker>,
     json_rpc: &Value,
     request_id: Uuid,
     client_ip: &str,
     json_rpc_id: &Value,
 ) -> Result<String> {
-    let (tx, rx) = oneshot::channel();
-    let req = DbRequest {
-        request: DbOperation::Get(id.to_vec()),
-        response: tx,
-    };
-
-    db.send(req)?;
-    let res = rx.await?;
+    let res = db::get_value(db, id.to_vec()).await?;
 
     match res {
-        Some(DbResponse::Value(val)) => {
+        Some(val) => {
             let stored_assertion: StoredAssertion = bincode::deserialize(&val)?;
+            let compiler_abi = compiler_abi::resolve(
+                db,
+                id,
+                LegacyCompilerArtifact {
+                    contract_name: &stored_assertion.assertion_contract_name,
+                    compiler_version: &stored_assertion.compiler_version,
+                    source: &stored_assertion.solidity_source,
+                    deployment_bytecode: &stored_assertion.bytecode,
+                },
+                docker,
+            )
+            .await?;
+            let has_compiler_metadata = !stored_assertion.solidity_source.is_empty();
 
             let result = DaFetchResponse {
                 solidity_source: stored_assertion.solidity_source,
@@ -516,6 +528,11 @@ async fn process_get_assertion(
                 prover_signature: stored_assertion.prover_signature.as_bytes().into(),
                 encoded_constructor_args: stored_assertion.encoded_constructor_args,
                 constructor_abi_signature: stored_assertion.constructor_abi_signature,
+                assertion_contract_name: has_compiler_metadata
+                    .then_some(stored_assertion.assertion_contract_name),
+                compiler_version: has_compiler_metadata
+                    .then_some(stored_assertion.compiler_version),
+                abi: compiler_abi,
             };
 
             Ok(rpc_response(json_rpc, result))
@@ -580,13 +597,20 @@ mod tests {
     use crate::api::{
         db::listen_for_db,
         serve,
+        types::{
+            DbOperation,
+            DbRequest,
+        },
     };
     use alloy::primitives::hex;
     use sled::Config as DbConfig;
     use tempfile::TempDir;
     use tokio::{
         net::TcpListener,
-        sync::mpsc,
+        sync::{
+            mpsc,
+            oneshot,
+        },
     };
     use tokio_util::sync::CancellationToken;
 
@@ -725,6 +749,29 @@ mod tests {
         assert!(id.is_string());
         assert!(response_json["result"]["prover_signature"].is_string());
 
+        let fetched: Value = client
+            .post(&server_url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "method": "da_get_assertion",
+                "params": [id],
+                "id": 3
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            fetched["result"]["assertion_contract_name"],
+            "SimpleStorage"
+        );
+        assert_eq!(fetched["result"]["compiler_version"], "0.8.17");
+        assert!(fetched["result"]["abi"]
+            .as_array()
+            .is_some_and(|abi| abi.iter().any(|item| item["name"] == "set")));
+
         let request_with_args = json!({
             "jsonrpc": "2.0",
             "method": "da_submit_solidity_assertion",
@@ -765,7 +812,7 @@ mod tests {
         let source_code = "contract Test { }";
         let stored_assertion = StoredAssertion {
             assertion_contract_name: "Test".to_string(),
-            compiler_version: "0.8.17".to_string(),
+            compiler_version: "legacy".to_string(),
             solidity_source: source_code.to_string(),
             bytecode: vec![1, 2, 3, 4],
             prover_signature: signer.sign_hash(&keccak256([1, 2, 3, 4])).await.unwrap(),
@@ -807,6 +854,9 @@ mod tests {
 
         let result = response_json["result"].as_object().unwrap();
         assert_eq!(result["solidity_source"].as_str().unwrap(), source_code);
+        assert_eq!(result["assertion_contract_name"], "Test");
+        assert_eq!(result["compiler_version"], "legacy");
+        assert!(result.get("abi").is_none());
         assert_eq!(
             hex::decode(
                 result["bytecode"]

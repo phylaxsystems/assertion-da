@@ -2,6 +2,7 @@ use crate::{
     api::types::{
         DbOperation,
         DbRequest,
+        DbRequestSender,
         DbResponse,
     },
     LEAF_FANOUT,
@@ -10,7 +11,10 @@ use crate::{
 use sled::Db;
 
 use anyhow::Result;
-use tokio::sync::mpsc;
+use tokio::sync::{
+    mpsc,
+    oneshot,
+};
 use tokio_util::sync::CancellationToken;
 
 /// Listens to a mpsc channel for database events and responds
@@ -30,7 +34,11 @@ pub async fn listen_for_db(
                 let res = match req.request {
                     DbOperation::Get(key) => db_get(&db, &key)?,
                     DbOperation::Insert(key, value) => {
-                        db_insert(&db, &key, &value)?;
+                        db_insert(&db, &key, &value, true)?;
+                        None
+                    }
+                    DbOperation::InsertMetadata(key, value) => {
+                        db_insert(&db, &key, &value, false)?;
                         None
                     }
                 };
@@ -51,19 +59,56 @@ fn db_get(db: &Db<{ LEAF_FANOUT }>, key: &Vec<u8>) -> Result<Option<DbResponse>>
     Ok(Some(DbResponse::Value(rax)))
 }
 
-fn db_insert(db: &Db<{ LEAF_FANOUT }>, key: &Vec<u8>, value: &Vec<u8>) -> Result<()> {
+fn db_insert(
+    db: &Db<{ LEAF_FANOUT }>,
+    key: &Vec<u8>,
+    value: &Vec<u8>,
+    count_assertion: bool,
+) -> Result<()> {
     db.insert(key, value.to_owned())?;
 
     let db_size = db.size_on_disk()? / (1024 * 1024);
     metrics::gauge!("db_size_mb").set(db_size as f64);
-    metrics::gauge!("database_assertions_sum").increment(1);
+    if count_assertion {
+        metrics::gauge!("database_assertions_sum").increment(1);
+    }
+    Ok(())
+}
+
+pub async fn get_value(db: &DbRequestSender, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
+    let (response, receiver) = oneshot::channel();
+    db.send(DbRequest {
+        request: DbOperation::Get(key),
+        response,
+    })?;
+    Ok(receiver.await?.map(|response| {
+        match response {
+            DbResponse::Value(value) => value,
+        }
+    }))
+}
+
+pub async fn insert_assertion(db: &DbRequestSender, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+    insert(db, DbOperation::Insert(key, value)).await
+}
+
+pub async fn insert_metadata(db: &DbRequestSender, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+    insert(db, DbOperation::InsertMetadata(key, value)).await
+}
+
+async fn insert(db: &DbRequestSender, operation: DbOperation) -> Result<()> {
+    let (response, receiver) = oneshot::channel();
+    db.send(DbRequest {
+        request: operation,
+        response,
+    })?;
+    receiver.await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::oneshot;
 
     #[tokio::test]
     async fn test_db_operations() {
@@ -72,7 +117,7 @@ mod tests {
         // Test insert
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
-        db_insert(&db, &key, &value).unwrap();
+        db_insert(&db, &key, &value, true).unwrap();
 
         // Test get
         let result = db_get(&db, &key).unwrap();

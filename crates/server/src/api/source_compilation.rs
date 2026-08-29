@@ -1,3 +1,4 @@
+use alloy::json_abi::JsonAbi;
 use anyhow::Result;
 use bollard::container::{
     Config,
@@ -12,7 +13,6 @@ use bollard::Docker;
 use futures::TryStreamExt;
 use futures_util::stream::StreamExt;
 use metrics;
-use regex::Regex;
 use serde_json::Value;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -27,6 +27,15 @@ use tracing::{
     Instrument,
 };
 use uuid::Uuid;
+
+/// Upper bound for the compiler ABI persisted and returned with an assertion.
+pub const MAX_COMPILER_ABI_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct CompilationArtifact {
+    pub bytecode: Vec<u8>,
+    pub abi: JsonAbi,
+}
 
 /// Maximum number of attempts to ensure image availability
 const MAX_ATTEMPTS: u32 = 3;
@@ -46,7 +55,7 @@ pub struct SolcArgs {
 impl Default for SolcArgs {
     fn default() -> Self {
         Self {
-            output_type: "bin".to_string(),
+            output_type: "bin,abi".to_string(),
             metadata_hash: "none".to_string(),
             combined_json: true,
             file_path: "".to_string(),
@@ -402,23 +411,11 @@ pub struct CompilationConfig {
 
 impl CompilationConfig {
     pub fn new(assertion_contract_name: &str, source_code: &str, compiler_version: &str) -> Self {
-        // Validate compiler version format (should be like 0.8.17)
-        // This regex handles both exact versions (0.8.17) and complex version requirements (=0.8.28 ^0.8.13)
-        let version_regex =
-            Regex::new(r"^\d+\.\d+\.\d+$|^=\d+\.\d+\.\d+\s+\^\d+\.\d+\.\d+$").unwrap();
-        if !version_regex.is_match(compiler_version) {
-            debug!(
-                target: "solidity_compilation",
-                compiler_version = compiler_version,
-                "Invalid compiler version format"
-            );
-        }
-
         Self {
             assertion_contract_name: assertion_contract_name.to_string(),
             source_code: source_code.to_string(),
             compiler_version: compiler_version.to_string(),
-            output_type: "bin".to_string(),
+            output_type: "bin,abi".to_string(),
             metadata_hash: "none".to_string(),
         }
     }
@@ -430,18 +427,18 @@ pub struct CompilationMetrics {
 }
 
 impl CompilationMetrics {
-    pub fn new(compiler_version: &str) -> Self {
-        Self {
+    pub fn start(compiler_version: &str) -> Self {
+        let metrics = Self {
             labels: [("compiler_version", compiler_version.to_string())],
-        }
+        };
+        metrics::counter!("assertion_compilations_total", &metrics.labels).increment(1);
+        metrics::gauge!("assertion_compilations_running", &metrics.labels).increment(1);
+        metrics
     }
+}
 
-    pub fn start_compilation(&self) {
-        metrics::counter!("assertion_compilations_total", &self.labels).increment(1);
-        metrics::gauge!("assertion_compilations_running", &self.labels).increment(1);
-    }
-
-    pub fn end_compilation(&self) {
+impl Drop for CompilationMetrics {
+    fn drop(&mut self) {
         metrics::gauge!("assertion_compilations_running", &self.labels).decrement(1);
     }
 }
@@ -456,17 +453,17 @@ impl SolidityCompiler {
         Self { docker }
     }
 
-    /// Compiles a Solidity contract and returns the bytecode
-    pub async fn compile(&self, config: CompilationConfig) -> Result<Vec<u8>, CompilationError> {
-        let metrics = CompilationMetrics::new(&config.compiler_version);
-        metrics.start_compilation();
-
-        // Ensure the contract exists in the source code
-        if !config.source_code.contains(&config.assertion_contract_name) {
-            return Err(CompilationError::ContractNotFound(
-                config.assertion_contract_name,
+    /// Compiles a Solidity contract and returns its deployment bytecode and ABI.
+    pub async fn compile(
+        &self,
+        config: CompilationConfig,
+    ) -> Result<CompilationArtifact, CompilationError> {
+        if !is_supported_compiler_version(&config.compiler_version) {
+            return Err(CompilationError::InvalidCompilerVersion(
+                config.compiler_version,
             ));
         }
+        let _metrics = CompilationMetrics::start(&config.compiler_version);
 
         // Set up the image
         let image_name = format!("ethereum/solc:{}", config.compiler_version);
@@ -489,24 +486,18 @@ impl SolidityCompiler {
         solc_args.metadata_hash = config.metadata_hash;
 
         // Execute the compilation
-        let result = self
-            .execute_compilation(
-                &image_name,
-                solc_args.to_command_args(),
-                mount_binds,
-                &config.assertion_contract_name,
-                source_file.file_name(),
-            )
-            .instrument(tracing::info_span!("execute_compilation"))
-            .await;
-
-        // Always decrement the metrics counter
-        metrics.end_compilation();
-
-        result
+        self.execute_compilation(
+            &image_name,
+            solc_args.to_command_args(),
+            mount_binds,
+            &config.assertion_contract_name,
+            source_file.file_name(),
+        )
+        .instrument(tracing::info_span!("execute_compilation"))
+        .await
     }
 
-    /// Executes the compilation in a container and extracts the bytecode
+    /// Executes the compilation in a container and extracts the compiler artifact.
     #[instrument(name = "execute_compilation", skip(self, mount_binds))]
     async fn execute_compilation(
         &self,
@@ -515,7 +506,7 @@ impl SolidityCompiler {
         mount_binds: Vec<String>,
         contract_name: &str,
         file_name: &str,
-    ) -> Result<Vec<u8>, CompilationError> {
+    ) -> Result<CompilationArtifact, CompilationError> {
         // Create and run the container
         let mut container = ContainerManager::new(self.docker.clone(), contract_name);
         // Use a defer-like pattern with Result to ensure cleanup happens
@@ -536,10 +527,7 @@ impl SolidityCompiler {
             // Get the output logs
             let log_messages = container.get_logs(true, false).await?;
 
-            // Parse output and extract bytecode
-            let bytecode = self
-                .extract_bytecode(&log_messages, file_name, contract_name)
-                .await?;
+            let artifact = extract_compilation_artifact(&log_messages, file_name, contract_name)?;
 
             debug!(
                 target: "solidity_compilation",
@@ -547,7 +535,7 @@ impl SolidityCompiler {
                 "Finished Solidity compilation"
             );
 
-            Ok(bytecode)
+            Ok(artifact)
         }
         .await;
 
@@ -563,32 +551,41 @@ impl SolidityCompiler {
 
         result
     }
+}
 
-    /// Parse the JSON output and extract the bytecode
-    async fn extract_bytecode(
-        &self,
-        json_output: &str,
-        file_name: &str,
-        contract_name: &str,
-    ) -> Result<Vec<u8>, CompilationError> {
-        // Parse the JSON output from solc
-        let output: Value = serde_json::from_str(json_output)?;
-
-        // Extract the bytecode from the assertion contract
-        let contracts = output["contracts"]
-            .as_object()
-            .ok_or_else(|| CompilationError::InvalidJsonOutput)?;
-
-        let contract_key = format!("{file_name}:{contract_name}");
-        let bytecode = contracts[&contract_key]["bin"]
-            .as_str()
-            .ok_or_else(|| CompilationError::MissingBytecode)?;
-
-        // Convert hex bytecode to bytes
-        let bytecode_bytes = hex::decode(bytecode)?;
-
-        Ok(bytecode_bytes)
+fn extract_compilation_artifact(
+    json_output: &str,
+    file_name: &str,
+    contract_name: &str,
+) -> Result<CompilationArtifact, CompilationError> {
+    let output: Value = serde_json::from_str(json_output)?;
+    let contracts = output["contracts"]
+        .as_object()
+        .ok_or(CompilationError::InvalidJsonOutput)?;
+    let contract_key = format!("{file_name}:{contract_name}");
+    let contract = contracts
+        .get(&contract_key)
+        .ok_or_else(|| CompilationError::ContractOutputNotFound(contract_key.clone()))?;
+    let bytecode = contract["bin"]
+        .as_str()
+        .ok_or(CompilationError::MissingBytecode)?;
+    let abi_value = contract
+        .get("abi")
+        .filter(|value| value.is_array())
+        .cloned()
+        .ok_or(CompilationError::MissingAbi)?;
+    let abi: JsonAbi = serde_json::from_value(abi_value)?;
+    let abi_bytes = serde_json::to_vec(&abi)?.len();
+    if abi_bytes > MAX_COMPILER_ABI_BYTES {
+        return Err(CompilationError::AbiTooLarge {
+            actual: abi_bytes,
+            maximum: MAX_COMPILER_ABI_BYTES,
+        });
     }
+    Ok(CompilationArtifact {
+        bytecode: hex::decode(bytecode)?,
+        abi,
+    })
 }
 
 /// Compiles Solidity source code using a Docker container with the specified compiler version
@@ -597,25 +594,37 @@ pub async fn compile_solidity(
     source_code: &str,
     compiler_version: &str,
     docker: Arc<Docker>,
-) -> Result<Vec<u8>> {
+) -> Result<CompilationArtifact, CompilationError> {
     let config = CompilationConfig::new(assertion_contract_name, source_code, compiler_version);
     let compiler = SolidityCompiler::new(docker);
-    compiler.compile(config).await.map_err(Into::into)
+    compiler.compile(config).await
+}
+
+pub fn is_supported_compiler_version(value: &str) -> bool {
+    semver::Version::parse(value).is_ok_and(|version| {
+        version.pre.is_empty() && version.build.is_empty() && version.to_string() == value
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompilationError {
-    #[error("Contract '{0}' not found in source code")]
-    ContractNotFound(String),
-
     #[error("Compilation failed: {0}")]
     CompilationFailed(String),
 
     #[error("Missing bytecode in compiler output")]
     MissingBytecode,
 
-    #[error("Invalid compiler output: {0}")]
-    InvalidOutput(String),
+    #[error("Missing ABI in compiler output")]
+    MissingAbi,
+
+    #[error("Compiler output did not contain contract '{0}'")]
+    ContractOutputNotFound(String),
+
+    #[error("Compiler ABI is {actual} bytes; maximum is {maximum} bytes")]
+    AbiTooLarge { actual: usize, maximum: usize },
+
+    #[error("Invalid compiler version '{0}'")]
+    InvalidCompilerVersion(String),
 
     #[error("Docker error {0}")]
     DockerError(#[from] bollard::errors::Error),
@@ -674,8 +683,12 @@ mod tests {
 
         let result = compile_solidity("SimpleStorage", source_code, "0.8.17", docker).await;
         assert!(result.is_ok(), "Compilation should succeed");
-        let bytecode = result.unwrap();
-        assert!(!bytecode.is_empty(), "Bytecode should not be empty");
+        let artifact = result.unwrap();
+        assert!(
+            !artifact.bytecode.is_empty(),
+            "Bytecode should not be empty"
+        );
+        assert!(artifact.abi.functions.contains_key("set"));
     }
 
     #[tokio::test]
@@ -749,7 +762,10 @@ mod tests {
                 result.is_ok(),
                 "Compilation should succeed with version {version}"
             );
-            assert!(!result.unwrap().is_empty(), "Bytecode should not be empty");
+            assert!(
+                !result.unwrap().bytecode.is_empty(),
+                "Bytecode should not be empty"
+            );
         }
     }
 
@@ -764,7 +780,7 @@ mod tests {
             "Complex contract compilation should succeed"
         );
         assert!(
-            !result.unwrap().is_empty(),
+            !result.unwrap().bytecode.is_empty(),
             "Complex contract bytecode should not be empty"
         );
     }
@@ -797,8 +813,58 @@ mod tests {
         for handle in handles {
             let result = handle.await.unwrap();
             assert!(result.is_ok(), "Concurrent compilation should succeed");
-            assert!(!result.unwrap().is_empty(), "Bytecode should not be empty");
+            assert!(
+                !result.unwrap().bytecode.is_empty(),
+                "Bytecode should not be empty"
+            );
         }
+    }
+
+    #[test]
+    fn extracts_exact_contract_artifact() {
+        let output = serde_json::json!({
+            "contracts": {
+                "Assertion.sol:First": {
+                    "bin": "6001",
+                    "abi": [{"type": "function", "name": "first", "inputs": [], "outputs": []}]
+                },
+                "Assertion.sol:Second": {
+                    "bin": "6002",
+                    "abi": [{"type": "function", "name": "second", "inputs": [], "outputs": []}]
+                }
+            }
+        });
+
+        let artifact =
+            extract_compilation_artifact(&output.to_string(), "Assertion.sol", "Second").unwrap();
+
+        assert_eq!(artifact.bytecode, hex::decode("6002").unwrap());
+        assert!(artifact.abi.functions.contains_key("second"));
+    }
+
+    #[test]
+    fn rejects_missing_or_non_array_abi() {
+        for abi in [Value::Null, Value::String("[]".to_string())] {
+            let output = serde_json::json!({
+                "contracts": {
+                    "Assertion.sol:Assertion": {"bin": "6001", "abi": abi}
+                }
+            });
+
+            assert!(matches!(
+                extract_compilation_artifact(&output.to_string(), "Assertion.sol", "Assertion"),
+                Err(CompilationError::MissingAbi)
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_compiler_version_before_docker() {
+        assert!(!is_supported_compiler_version("latest"));
+        assert!(!is_supported_compiler_version("0.8"));
+        assert!(!is_supported_compiler_version("0.8.28-nightly"));
+        assert!(!is_supported_compiler_version("01.8.28"));
+        assert!(is_supported_compiler_version("0.8.28"));
     }
 
     #[tokio::test]

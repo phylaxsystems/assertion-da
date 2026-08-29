@@ -176,13 +176,22 @@ Parameters:
   "result": {
     "solidity_source": "contract MyAssertion { ... }",
     "bytecode": "0x...",
-    "signature": "0x..."
+    "prover_signature": "0x...",
     "encoded_constructor_args": "",
-    "constructor_abi_signature": "constructor()"
+    "constructor_abi_signature": "constructor()",
+    "assertion_contract_name": "MyAssertion",
+    "compiler_version": "0.8.17",
+    "abi": [{ "type": "function", "name": "check", "inputs": [] }]
   },
   "id": 1
 }
 ```
+
+`abi` is the exact JSON ABI emitted by the selected Solidity compiler and is
+stored when the assertion is submitted. Existing records are recompiled and
+backfilled on first read after verifying that the compiler bytecode matches the
+stored deployment bytecode. Compiler metadata is omitted only for raw-bytecode
+submissions or legacy records that cannot be safely reconstructed.
 
 ### Error Codes
 
@@ -227,9 +236,12 @@ curl -X POST -H "Content-Type: application/json" http://localhost:5001 -d '{
         {
             "solidity_source": "contract MyAssertion { ... }",
             "bytecode": "0x...",
-            "signature": "0x..."
+            "prover_signature": "0x...",
             "encoded_constructor_args": "0x0000000000000000000000000000000000000000000000000000000000000005",
-            "constructor_abi_signature": "constructor(uint256)"
+            "constructor_abi_signature": "constructor(uint256)",
+            "assertion_contract_name": "MyAssertion",
+            "compiler_version": "0.8.17",
+            "abi": []
         },
     ],
     "id": 1
@@ -238,6 +250,6 @@ curl -X POST -H "Content-Type: application/json" http://localhost:5001 -d '{
 
 ## Limitations
 
-- Only one contract per Solidity source file is supported
+- The contract selected by `assertion_contract_name` is returned when a source file defines multiple contracts
 - Compilation is performed using Docker containers
 - Supported Solidity versions depend on available [ethereum/solc](https://hub.docker.com/r/ethereum/solc) images

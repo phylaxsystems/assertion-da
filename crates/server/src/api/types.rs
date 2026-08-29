@@ -13,6 +13,8 @@ pub enum DbOperation {
     Get(Vec<u8>),
     /// Inserts into Db
     Insert(Vec<u8>, Vec<u8>),
+    /// Inserts auxiliary metadata without changing assertion-count metrics.
+    InsertMetadata(Vec<u8>, Vec<u8>),
 }
 
 #[derive(Debug, Clone)]

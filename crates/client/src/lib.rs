@@ -348,7 +348,7 @@ mod tests {
             bytecode: vec![1, 2, 3, 4],
             prover_signature: signer.sign_hash(&keccak256([1, 2, 3, 4])).await.unwrap(),
             assertion_contract_name: "Test".to_string(),
-            compiler_version: "0.8.17".to_string(),
+            compiler_version: "legacy".to_string(),
             constructor_abi_signature: "constructor()".to_string(),
             encoded_constructor_args: Bytes::new(),
         };
@@ -523,7 +523,7 @@ mod tests {
             bytecode: bytecode.clone(),
             prover_signature: signature,
             assertion_contract_name: "Test".to_string(),
-            compiler_version: "0.8.17".to_string(),
+            compiler_version: "legacy".to_string(),
             constructor_abi_signature: "constructor()".to_string(),
             encoded_constructor_args: Bytes::new(),
         };

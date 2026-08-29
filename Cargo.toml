@@ -17,6 +17,7 @@ futures = "0.3.30"
 reqwest = { version = "0.12.5", features = ["json"] }
 serde = "1.0.204"
 serde_json = "1.0.121"
+semver = "1.0"
 tokio = { version = "1.39.2", features = ["full"] }
 tokio-util = "0.7.15"
 zerocopy = "0.7.35"
@@ -40,4 +41,3 @@ bollard = "0.18"
 
 tracing = "0.1.41"
 tracing-subscriber = {version = "0.3", features = ["std", "env-filter"]}
-

@@ -97,6 +97,7 @@
 //! - -32603: Internal error
 
 pub mod accept;
+mod compiler_abi;
 pub mod db;
 pub mod process_request;
 pub mod source_compilation;
